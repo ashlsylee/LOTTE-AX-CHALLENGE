@@ -29,7 +29,7 @@ def load_scenario(path) -> dict:
 
 
 def run(scenario: dict, panel: pd.DataFrame, llm: LLM, seed: int = 42,
-        tag: str = "", workers: int = 8, progress=None) -> pd.DataFrame:
+        tag: str = "", workers: int = 8, progress=None, **agent_kw) -> pd.DataFrame:
     """패널 전원에게 묻고 한 사람당 한 행인 DataFrame을 돌려준다."""
     products, concept = scenario["products"], scenario["concept_id"]
     records = panel.to_dict("records")
@@ -39,7 +39,7 @@ def run(scenario: dict, panel: pd.DataFrame, llm: LLM, seed: int = 42,
         p = records[i]
         base = {c: p[c] for c in SEGMENT_COLS}
         try:
-            r = ask_persona(llm, p, products, scenario["situation"], seed, tag)
+            r = ask_persona(llm, p, products, scenario["situation"], seed, tag, **agent_kw)
         except Exception as e:  # 형식 오류·API 오류는 버리지 않고 기록
             return i, {**base, "error": f"{type(e).__name__}: {e}"[:300]}
         row = {**base, "choice": r["choice"], "reason": r["reason"],

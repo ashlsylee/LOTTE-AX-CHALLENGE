@@ -1,0 +1,156 @@
+"""대조실험: 같은 패널(같은 seed)에 조건 하나씩만 바꿔 묻고 결과를 비교한다.
+
+첫 실행에서 레몬 탄산수 79% 쏠림이 나와 원인 가설을 하나씩 분리하기 위해 만들었다.
+    base           : 현재 설정 (기준)
+    no_antibias    : 반편향 지시문 제거             → 가설① 지시문 과잉 교정
+    neutral_desc   : 제품 설명을 맛·종류만 남김     → 가설② '무가당·제로' 같은 건강 단어
+    equal_price    : 모든 제품 같은 가격            → 가격 효과 분리
+    neutral_situ   : 상황을 중립적으로             → 가설③ "목이 조금 마름" 유도
+    full_persona   : 페르소나 서술 전체 사용        → 가설④ 페르소나 정보 부족
+
+예시:
+    python -m vm.experiments --n 100                       # 전체 조건
+    python -m vm.experiments --n 30 --only base full_persona   # 일부만, 적은 인원
+    python -m vm.experiments --n 100 --mock                # API 없이 시험
+"""
+import argparse
+import copy
+import json
+import math
+import re
+from datetime import datetime
+
+import pandas as pd
+
+from .agent import SYSTEM, persona_profile, persona_profile_full
+from .config import OUT_DIR
+from .llm import LLM
+from .personas import load_pool, sample_panel
+from .simulate import load_scenario, run
+
+SYSTEM_NO_ANTIBIAS = """당신은 아래 프로필을 가진 실제 한국 소비자입니다. 이 사람으로서 판단하세요.
+- 답은 이 사람의 말투로, 짧고 구체적으로 쓰세요."""
+
+NEUTRAL_SITUATION = "편의점에서 마실 음료를 하나 고르려고 합니다. 사지 않고 그냥 나가도 됩니다."
+
+# 제품 설명에서 맛·종류만 남긴 버전 (건강·평가 단어 제거). 시나리오 파일에 neutral_description이 있으면 그것을 쓴다.
+NEUTRAL_DESC_DEFAULT = {
+    "NEW": "청귤맛 탄산음료",
+    "COMP_COLA": "콜라",
+    "COMP_WATER": "레몬향 탄산수",
+    "COMP_ION": "이온음료",
+}
+
+
+def make_conditions(scenario: dict) -> dict:
+    """조건 이름 → (시나리오, agent 옵션). base와 한 가지씩만 다르다."""
+    base_kw = {"system": SYSTEM, "profile_fn": persona_profile}
+    conds = {"base": (scenario, base_kw)}
+
+    conds["no_antibias"] = (scenario, {**base_kw, "system": SYSTEM_NO_ANTIBIAS})
+
+    sc = copy.deepcopy(scenario)
+    for prod in sc["products"]:
+        prod["description"] = prod.get("neutral_description") or NEUTRAL_DESC_DEFAULT.get(prod["id"], prod["description"])
+    conds["neutral_desc"] = (sc, base_kw)
+
+    sc = copy.deepcopy(scenario)
+    avg = round(sum(p["price"] for p in sc["products"]) / len(sc["products"]) / 100) * 100
+    for prod in sc["products"]:
+        prod["price"] = avg
+    conds["equal_price"] = (sc, base_kw)
+
+    sc = copy.deepcopy(scenario)
+    sc["situation"] = NEUTRAL_SITUATION
+    conds["neutral_situ"] = (sc, base_kw)
+
+    conds["full_persona"] = (scenario, {**base_kw, "profile_fn": persona_profile_full})
+    return conds
+
+
+def entropy(shares: pd.Series) -> float:
+    """선택 분포의 다양성(0=한 제품 독식, 1=완전 균등). 쏠림 지표."""
+    p = shares[shares > 0]
+    return float(-(p * p.apply(math.log)).sum() / math.log(len(shares))) if len(shares) > 1 else 0.0
+
+
+def persona_grounding(df: pd.DataFrame, panel: pd.DataFrame) -> float:
+    """이유에 그 사람의 직업·취미·식생활 단어가 등장하는 비율(대략적인 페르소나 반영도)."""
+    info = panel.set_index("uuid")
+    hits = 0
+    for _, r in df.iterrows():
+        p = info.loc[r["uuid"]]
+        words = set()
+        for col in ["occupation", "hobbies_and_interests", "culinary_persona", "sports_persona"]:
+            if col in p and isinstance(p[col], str):
+                words |= {w for w in re.findall(r"[가-힣]{2,}", p[col]) if len(w) >= 2}
+        stop = {"편의점", "음료", "가격", "마시", "있는", "하는", "좋아", "때문", "정도", "그냥", "지금"}
+        words -= stop
+        if any(w in str(r["reason"]) for w in words):
+            hits += 1
+    return hits / max(len(df), 1)
+
+
+def summarize(name: str, df: pd.DataFrame, scenario: dict, panel: pd.DataFrame) -> dict:
+    ok = df[df["error"] == ""]
+    ids = [p["id"] for p in scenario["products"]] + ["NONE"]
+    shares = ok["choice"].value_counts(normalize=True).reindex(ids, fill_value=0)
+    c = scenario["concept_id"]
+    row = {"condition": name, "n_ok": len(ok)}
+    for pid in ids:
+        row[f"share_{pid}"] = round(shares[pid] * 100, 1)
+    row["top_share"] = round(shares.max() * 100, 1)
+    row["diversity"] = round(entropy(shares), 3)
+    row["concept_intent"] = round(ok[f"intent_{c}"].mean(), 2)
+    row["concept_intent_sd"] = round(ok[f"intent_{c}"].std(), 2)
+    row["intent5_any"] = round((ok[[f"intent_{p['id']}" for p in scenario["products"]]] == 5).any(axis=1).mean() * 100, 1)
+    row["persona_grounding"] = round(persona_grounding(ok, panel) * 100, 1)
+    row["mentions_thirst"] = round(ok["reason"].str.contains("목|축이|갈증").mean() * 100, 1)
+    row["mentions_price"] = round(ok["reason"].str.contains(r"원|가격|싼|비싸|아깝").mean() * 100, 1)
+    return row
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--scenario", default="config/scenario_example.json")
+    ap.add_argument("--n", type=int, default=100)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--only", nargs="*", help="돌릴 조건 이름들 (기본: 전부)")
+    ap.add_argument("--mock", action="store_true")
+    ap.add_argument("--model")
+    ap.add_argument("--workers", type=int, default=8)
+    a = ap.parse_args()
+
+    scenario = load_scenario(a.scenario)
+    panel = sample_panel(load_pool(), a.n, a.seed)
+    llm = LLM(a.model, mock=a.mock)
+    conds = make_conditions(scenario)
+    names = a.only or list(conds)
+
+    exp_dir = OUT_DIR / f"exp_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if a.mock else ''}"
+    exp_dir.mkdir(parents=True)
+    rows = []
+    for name in names:
+        sc, kw = conds[name]
+        print(f"\n=== {name} ===")
+        tag = "" if name == "base" else name  # base는 simulate.py 실행 결과(캐시)를 그대로 재사용
+        df = run(sc, panel, llm, a.seed, tag=tag, workers=a.workers,
+                 progress=lambda d, n: print(f"진행 {d}/{n}", flush=True) if d % 25 == 0 or d == n else None, **kw)
+        df.to_csv(exp_dir / f"responses_{name}.csv", index=False, encoding="utf-8-sig")
+        rows.append(summarize(name, df, sc, panel))
+
+    table = pd.DataFrame(rows).set_index("condition")
+    table.to_csv(exp_dir / "comparison.csv", encoding="utf-8-sig")
+    (exp_dir / "meta.json").write_text(json.dumps(
+        {"n": a.n, "seed": a.seed, "model": "mock" if a.mock else llm.model, "conditions": names,
+         "api_calls": llm.api_calls, "cache_hits": llm.cache_hits}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    pd.set_option("display.width", 200)
+    print("\n\n[조건별 비교]  (share_* = 선택 비율%, diversity = 0 독식~1 균등, persona_grounding = 이유에 본인 정보 등장%)")
+    print(table.T.to_string())
+    print(f"\n새 응답 {llm.api_calls}개, 캐시 재사용 {llm.cache_hits}개")
+    print(f"저장: {exp_dir}")
+
+
+if __name__ == "__main__":
+    main()

@@ -28,6 +28,25 @@ def persona_profile(p: dict) -> str:
     )
 
 
+FULL_FIELDS = [
+    ("직업 생활", "professional_persona"), ("운동", "sports_persona"), ("문화·예술", "arts_persona"),
+    ("여행", "travel_persona"), ("가족", "family_persona"), ("자라온 배경", "cultural_background"),
+    ("잘하는 것", "skills_and_expertise"), ("앞으로의 목표", "career_goals_and_ambitions"),
+]
+
+
+def persona_profile_full(p: dict) -> str:
+    """Nemotron 데이터셋의 서술형 항목을 모두 넣은 프로필 (대조실험용)."""
+    def cut(text, n=300):
+        text = str(text or "").strip()
+        return text if len(text) <= n else text[:n] + "…"
+    lines = [persona_profile(p), f"- 학력: {p.get('education_level', '')} {p.get('bachelors_field') or ''}".rstrip()]
+    for label, col in FULL_FIELDS:
+        if p.get(col):
+            lines.append(f"- {label}: {cut(p[col])}")
+    return "\n".join(lines)
+
+
 def shuffled_shelf(products: list[dict], uuid: str, seed: int) -> list[dict]:
     """페르소나마다 다르지만, 같은 (uuid, seed)면 항상 같은 순서."""
     rng = random.Random(f"{uuid}|{seed}")
@@ -93,14 +112,16 @@ def mock_response(p: dict, shelf: list[dict], tag: str) -> dict:
     return {"choice": choice, "intent": intent, "max_price": max_price, "reason": "(mock 응답)"}
 
 
-def ask_persona(llm, p: dict, products: list[dict], situation: str, seed: int, tag: str = "") -> dict:
-    """한 페르소나에게 묻고, 진열대 글자(A,B..)를 제품 id로 되돌린 결과를 반환."""
+def ask_persona(llm, p: dict, products: list[dict], situation: str, seed: int, tag: str = "",
+                system: str = SYSTEM, profile_fn=persona_profile) -> dict:
+    """한 페르소나에게 묻고, 진열대 글자(A,B..)를 제품 id로 되돌린 결과를 반환.
+    system/profile_fn 을 바꾸면 대조실험(지시문 유무, 프로필 범위)을 할 수 있다."""
     shelf = shuffled_shelf(products, p["uuid"], seed)
     letters = LETTERS[:len(shelf)]
     letter_to_id = {l: prod["id"] for l, prod in zip(letters, shelf)}
     out = llm.ask_json(
-        SYSTEM,
-        build_user_prompt(persona_profile(p), situation, shelf),
+        system,
+        build_user_prompt(profile_fn(p), situation, shelf),
         response_schema(len(shelf)),
         mock_fn=lambda: mock_response(p, shelf, tag),
         tag=tag,

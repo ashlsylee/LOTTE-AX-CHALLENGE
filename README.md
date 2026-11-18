@@ -31,7 +31,7 @@ cp .env.example .env
 
 VS Code 오른쪽 아래 Python 인터프리터를 `.venv`로 선택해 두면 편합니다.
 
-## 2. 처음 한 번만: 페르소나 풀 받기 (약 20초~1분, 약 50MB)
+## 2. 처음 한 번만: 페르소나 풀 받기 (약 1분, 약 200MB)
 
 ```bash
 python -m vm.personas --shards 1
@@ -65,7 +65,29 @@ python -m vm.simulate --n 100
 같은 조건으로 다시 돌리면 `outputs/llm_cache.jsonl`의 응답을 재사용합니다(비용 0, 같은 결과).
 새로 받고 싶으면 이 파일을 지우세요.
 
-## 4. 시나리오 바꾸기
+## 4. 대조실험 (같은 패널, 조건 하나씩만 변경)
+
+```bash
+python -m vm.experiments --n 100
+```
+| 조건 | 바꾸는 것 | 확인하려는 가설 |
+|---|---|---|
+| `base` | 없음 (기준, simulate 결과 캐시 재사용) | — |
+| `no_antibias` | 반편향 지시문 제거 | 지시문이 '가장 싼 것'으로 과잉 교정했나 |
+| `neutral_desc` | 제품 설명을 맛·종류만 남김 | '무가당·제로' 같은 건강 단어에 끌렸나 |
+| `equal_price` | 모든 제품 같은 가격 | 가격이 선택을 얼마나 좌우하나 |
+| `neutral_situ` | 상황을 "음료를 고르려 한다"로 | "목이 조금 마름"이 탄산수로 유도했나 |
+| `full_persona` | 페르소나 서술 11종 전부 사용 | 프로필 정보가 부족해서 답이 비슷해졌나 |
+
+일부만: `--only base full_persona`, 적은 인원으로 먼저: `--n 30`
+
+결과: `outputs/exp_날짜시각/comparison.csv` (조건별 비교표) + 조건별 `responses_*.csv`
+- `share_*` 선택 비율%, `top_share` 1위 제품 비율(쏠림), `diversity` 선택 다양성(0 독식 ~ 1 균등)
+- `concept_intent(_sd)` 신제품 구매의향 평균(표준편차), `intent5_any` 5점을 한 번이라도 준 비율
+- `persona_grounding` 이유에 본인 직업·취미·식생활 단어가 나온 비율(대략적인 페르소나 반영도)
+- `mentions_thirst` / `mentions_price` 이유에 갈증 / 가격 언급 비율
+
+## 5. 시나리오 바꾸기
 
 `config/scenario_example.json`을 복사해 수정합니다.
 - `situation`: 소비자가 처한 상황
@@ -83,5 +105,5 @@ python -m vm.simulate --n 100
 ## 진행 상황
 
 - [x] 1일차: 페르소나 패널 + 에이전트 + CLI 실행
-- [ ] 2일차: 분석·신뢰도 검증(긍정 편향, 위치 편향, 반복 일관성, 가격 대조실험) + 리포트
+- [~] 2일차: 대조실험 도구(완료) / 분석·신뢰도 검증(긍정 편향, 위치 편향, 반복 일관성) + 리포트
 - [ ] 3일차: Streamlit 화면

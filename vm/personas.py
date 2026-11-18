@@ -16,8 +16,11 @@ from .config import AGE_BINS, AGE_LABELS, PERSONA_PATH
 N_TOTAL_SHARDS = 9
 COLUMNS = [
     "uuid", "sex", "age", "marital_status", "family_type", "housing_type",
-    "education_level", "occupation", "province", "district",
+    "education_level", "bachelors_field", "occupation", "province", "district",
+    # 서술형 페르소나 (기본 프로필은 persona·culinary·hobbies만, 'full' 프로필은 전부 사용)
     "persona", "culinary_persona", "hobbies_and_interests",
+    "professional_persona", "sports_persona", "arts_persona", "travel_persona",
+    "family_persona", "cultural_background", "skills_and_expertise", "career_goals_and_ambitions",
 ]
 
 
@@ -40,6 +43,9 @@ def load_pool() -> pd.DataFrame:
         raise FileNotFoundError(
             f"{PERSONA_PATH} 가 없습니다. 먼저 `python -m vm.personas` 를 실행하세요.")
     pool = pd.read_parquet(PERSONA_PATH)
+    if "sports_persona" not in pool.columns:
+        print("※ 페르소나 풀이 예전 버전이라 'full' 프로필용 열이 없습니다. "
+              "`python -m vm.personas` 를 다시 실행하세요.")
     pool["age_group"] = pd.cut(pool["age"], bins=AGE_BINS, labels=AGE_LABELS, right=False)
     pool["is_capital"] = pool["province"].isin(["서울", "경기", "인천"]).map(
         {True: "수도권", False: "비수도권"})
