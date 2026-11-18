@@ -1,0 +1,15 @@
+{
+  "name": "제로 청귤 스파클링 컨셉 검증 (예시)",
+  "situation": "편의점에 들렀다가 음료 진열대 앞에 서 있습니다. 목이 조금 마르고, 마실 것을 하나 살지 고민 중입니다.",
+  "concept_id": "NEW",
+  "products": [
+    {"id": "NEW", "name": "제주 청귤 제로 스파클링", "volume_ml": 500, "price": 1900,
+     "description": "제로슈거·제로칼로리, 제주 청귤 과즙 3%, 상큼한 탄산"},
+    {"id": "COMP_COLA", "name": "A사 제로 콜라", "volume_ml": 500, "price": 2000,
+     "description": "제로슈거 콜라, 익숙한 맛"},
+    {"id": "COMP_WATER", "name": "B사 레몬 탄산수", "volume_ml": 500, "price": 1500,
+     "description": "무가당 탄산수, 레몬향"},
+    {"id": "COMP_ION", "name": "C사 이온음료", "volume_ml": 500, "price": 1800,
+     "description": "갈증 해소용 이온음료, 단맛"}
+  ]
+}
