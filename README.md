@@ -99,7 +99,31 @@ python -m vm.experiments --n 30 --only base balanced balanced_neutral habit_firs
 - `persona_grounding` 이유에 본인 직업·취미·식생활 단어가 나온 비율(대략적인 페르소나 반영도)
 - `mentions_thirst` / `mentions_price` 이유에 갈증 / 가격 언급 비율
 
-## 5. 시나리오 바꾸기
+## 5. 설문 재현 검증 (실제 소비자 조사와 비교)
+
+진열대 결과가 맞는지 판단할 기준이 없어서, 공개된 실제 설문과 **같은 질문**을 페르소나에게 묻고 비교합니다.
+
+- 기준 데이터: 한국농촌경제연구원 **식품소비행태조사** 성인 가구원 원자료 2023~2025
+  ([통계원시자료](https://krei.re.kr/foodSurvey/page/460)) — "가장 좋아하는 음료(1~3순위)", "제로 음료 섭취 빈도"
+- 저장소에는 원자료를 넣지 않고 집계표 `data/reference/krei_beverage.json`만 넣었습니다.
+  원자료에서 다시 만들려면: `python -m vm.reference --files 2023=경로 2024=경로 2025=경로`
+- 가중치: 연도 안에서는 조사 개인 가중치(psfwt), 연도는 2023:0.2 / 2024:0.3 / 2025:0.5, 70대 이상은 60대 이상으로 합침
+
+```bash
+python -m vm.survey --n-per-age 10            # 연령대 5개 × 10명 × 조건 5개
+python -m vm.survey --n-per-age 20 --only base balanced
+```
+
+**평가 규칙 (실행 전에 고정, 결과를 보고 바꾸지 않음)**
+
+| 구분 | 지표 | 쓰임 |
+|---|---|---|
+| 주 지표 | `fav_mae`: 연령대별 '좋아하는 음료 1순위' 분포 오차(%p) | **가장 작은 조건을 기본 설정으로 채택** (0.3%p 미만 차이면 `four_rate_mae`로 결정) |
+| 보조 | `four_rate_mae`: 연령대별 '탄산·이온 4종을 1순위로 꼽은 비율' 오차, `four_age_corr`: 연령 방향 일치도 | 해석용 |
+| 검증 | `zero_mae`: 연령대별 제로 음료 섭취 빈도 오차 (2025) | **설정 선택에 쓰지 않음**, 채택한 설정이 다른 문항에서도 맞는지 확인 |
+| 참고선 | 실제 조사끼리 연도 비교 `fav_mae` 1.2~1.8%p / 무작위 응답 기준선 | 오차가 어느 수준인지 해석 |
+
+## 6. 시나리오 바꾸기
 
 `config/scenario_example.json`을 복사해 수정합니다.
 - `situation`: 소비자가 처한 상황
@@ -117,5 +141,5 @@ python -m vm.experiments --n 30 --only base balanced balanced_neutral habit_firs
 ## 진행 상황
 
 - [x] 1일차: 페르소나 패널 + 에이전트 + CLI 실행
-- [~] 2일차: 대조실험 도구(완료) / 분석·신뢰도 검증(긍정 편향, 위치 편향, 반복 일관성) + 리포트
+- [~] 2일차: 대조실험 도구(완료) / 설문 재현 검증(완료) / 신뢰도 검증(긍정 편향, 위치 편향, 반복 일관성) + 리포트
 - [ ] 3일차: Streamlit 화면
