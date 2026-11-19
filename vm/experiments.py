@@ -12,6 +12,12 @@
     python -m vm.experiments --n 100                       # 전체 조건
     python -m vm.experiments --n 30 --only base full_persona   # 일부만, 적은 인원
     python -m vm.experiments --n 100 --mock                # API 없이 시험
+
+2차 후보 (30명 결과를 보고 추가):
+    balanced          : 가격·새로움 어느 쪽으로도 치우치지 않게 다시 쓴 지시문
+    balanced_neutral  : balanced + 중립 상황
+    habit_first       : balanced_neutral + 프로필에서 음료 습관을 먼저 추정해 붙임(2단계)
+    python -m vm.experiments --n 30 --only base balanced balanced_neutral habit_first
 """
 import argparse
 import copy
@@ -22,6 +28,9 @@ from datetime import datetime
 
 import pandas as pd
 
+import hashlib
+import random
+
 from .agent import SYSTEM, persona_profile, persona_profile_full
 from .config import OUT_DIR
 from .llm import LLM
@@ -30,6 +39,15 @@ from .simulate import load_scenario, run
 
 SYSTEM_NO_ANTIBIAS = """당신은 아래 프로필을 가진 실제 한국 소비자입니다. 이 사람으로서 판단하세요.
 - 답은 이 사람의 말투로, 짧고 구체적으로 쓰세요."""
+
+# 30명 실험 결과: 반편향 지시문을 빼면 신제품 선택이 0%→47%로 튀고(새것 선호 편향),
+# 넣으면 가장 싼 제품으로 쏠렸다. 가격·새로움 어느 쪽으로도 치우치지 않게 다시 쓴 지시문.
+SYSTEM_BALANCED = """당신은 아래 프로필을 가진 실제 한국 소비자입니다. 이 사람의 생활, 식습관, 취향을 바탕으로 판단하세요.
+- 새로운 제품이라는 이유만으로 더 좋게도, 더 나쁘게도 보지 마세요.
+- 가격은 이 사람의 형편과 습관에 맞게 고려하되, 몇백 원 차이를 과하게 따지지는 마세요.
+- 아무것도 사지 않는 것도 정상적인 선택입니다.
+- 이유에는 이 사람의 생활에서 나온 구체적인 근거를 넣으세요.
+- 답은 이 사람의 말투로, 짧게 쓰세요."""
 
 NEUTRAL_SITUATION = "편의점에서 마실 음료를 하나 고르려고 합니다. 사지 않고 그냥 나가도 됩니다."
 
@@ -42,8 +60,41 @@ NEUTRAL_DESC_DEFAULT = {
 }
 
 
-def make_conditions(scenario: dict) -> dict:
-    """조건 이름 → (시나리오, agent 옵션). base와 한 가지씩만 다르다."""
+HABIT_SYSTEM = """아래 프로필을 읽고, 이 사람의 평소 음료 습관을 추정하세요.
+프로필에 근거가 있으면 그것을 따르고, 근거가 없으면 극단적으로 추측하지 말고 보통(3) 근처로 두세요."""
+
+HABIT_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["usual_drinks", "carbonated", "sweet", "price_sensitivity", "evidence"],
+    "properties": {
+        "usual_drinks": {"type": "string"},
+        "carbonated": {"type": "integer"},
+        "sweet": {"type": "integer"},
+        "price_sensitivity": {"type": "integer"},
+        "evidence": {"type": "string"},
+    },
+}
+
+
+def make_habit_profile(llm):
+    """2단계 프로필: 먼저 프로필에서 음료 습관을 추정(1회 호출, 캐시됨)한 뒤 그 결과를 프로필에 붙인다."""
+    def mock(p):
+        rng = random.Random(hashlib.sha1(p["uuid"].encode()).hexdigest())
+        return {"usual_drinks": "물, 커피", "carbonated": rng.randint(1, 5), "sweet": rng.randint(1, 5),
+                "price_sensitivity": rng.randint(1, 5), "evidence": "(mock)"}
+
+    def profile(p):
+        h = llm.ask_json(HABIT_SYSTEM, persona_profile_full(p), HABIT_SCHEMA, mock_fn=lambda: mock(p), tag="habit")
+        clip = lambda v: min(5, max(1, int(v)))
+        return (persona_profile(p) + "\n"
+                f"- 평소 음료 습관(프로필 기반 추정): 자주 마시는 것 {h['usual_drinks']}, "
+                f"탄산 선호 {clip(h['carbonated'])}/5, 단맛 선호 {clip(h['sweet'])}/5, "
+                f"가격 민감도 {clip(h['price_sensitivity'])}/5")
+    return profile
+
+
+def make_conditions(scenario: dict, llm=None) -> dict:
+    """조건 이름 → (시나리오, agent 옵션). 단일 변경 조건은 base와 한 가지씩만 다르다."""
     base_kw = {"system": SYSTEM, "profile_fn": persona_profile}
     conds = {"base": (scenario, base_kw)}
 
@@ -65,7 +116,18 @@ def make_conditions(scenario: dict) -> dict:
     conds["neutral_situ"] = (sc, base_kw)
 
     conds["full_persona"] = (scenario, {**base_kw, "profile_fn": persona_profile_full})
+
+    # --- 2차 후보 (여러 요소를 함께 바꾼 개선안) ---
+    conds["balanced"] = (scenario, {**base_kw, "system": SYSTEM_BALANCED})
+    sc = copy.deepcopy(scenario)
+    sc["situation"] = NEUTRAL_SITUATION
+    conds["balanced_neutral"] = (sc, {**base_kw, "system": SYSTEM_BALANCED})
+    if llm is not None:
+        conds["habit_first"] = (sc, {"system": SYSTEM_BALANCED, "profile_fn": make_habit_profile(llm)})
     return conds
+
+
+FIRST_ROUND = ["base", "no_antibias", "neutral_desc", "equal_price", "neutral_situ", "full_persona"]
 
 
 def entropy(shares: pd.Series) -> float:
@@ -115,7 +177,7 @@ def main():
     ap.add_argument("--scenario", default="config/scenario_example.json")
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--only", nargs="*", help="돌릴 조건 이름들 (기본: 전부)")
+    ap.add_argument("--only", nargs="*", help="돌릴 조건 이름들 (기본: 1차 단일 변경 6개)")
     ap.add_argument("--mock", action="store_true")
     ap.add_argument("--model")
     ap.add_argument("--workers", type=int, default=8)
@@ -124,8 +186,8 @@ def main():
     scenario = load_scenario(a.scenario)
     panel = sample_panel(load_pool(), a.n, a.seed)
     llm = LLM(a.model, mock=a.mock)
-    conds = make_conditions(scenario)
-    names = a.only or list(conds)
+    conds = make_conditions(scenario, llm)
+    names = a.only or FIRST_ROUND
 
     exp_dir = OUT_DIR / f"exp_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if a.mock else ''}"
     exp_dir.mkdir(parents=True)

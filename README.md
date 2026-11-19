@@ -81,6 +81,18 @@ python -m vm.experiments --n 100
 
 일부만: `--only base full_persona`, 적은 인원으로 먼저: `--n 30`
 
+**2차 후보** (1차 30명 결과를 보고 추가, 기본 실행에는 포함되지 않음)
+
+| 조건 | 내용 |
+|---|---|
+| `balanced` | 가격·새로움 어느 쪽으로도 치우치지 않게 다시 쓴 지시문 |
+| `balanced_neutral` | balanced + 중립 상황 |
+| `habit_first` | balanced_neutral + 프로필에서 음료 습관을 먼저 추정해 붙임(2단계 호출) |
+
+```bash
+python -m vm.experiments --n 30 --only base balanced balanced_neutral habit_first
+```
+
 결과: `outputs/exp_날짜시각/comparison.csv` (조건별 비교표) + 조건별 `responses_*.csv`
 - `share_*` 선택 비율%, `top_share` 1위 제품 비율(쏠림), `diversity` 선택 다양성(0 독식 ~ 1 균등)
 - `concept_intent(_sd)` 신제품 구매의향 평균(표준편차), `intent5_any` 5점을 한 번이라도 준 비율
