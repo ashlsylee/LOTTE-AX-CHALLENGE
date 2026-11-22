@@ -112,13 +112,62 @@ def mock_response(p: dict, shelf: list[dict], tag: str) -> dict:
     return {"choice": choice, "intent": intent, "max_price": max_price, "reason": "(mock 응답)"}
 
 
+def build_prob_prompt(profile: str, situation: str, shelf: list[dict]) -> str:
+    """'100명 분포 응답': 대표 답 하나로 쏠리는 문제를 줄이기 위해(설문 재현 검증에서 효과 확인) 분포로 묻는다."""
+    return (
+        f"[프로필]\n{profile}\n\n"
+        "이 프로필과 나이·성별·생활이 비슷한 사람 100명이 아래 상황에 있다고 생각하세요. "
+        "같은 조건이어도 사람마다 취향·습관·가격 감각은 다릅니다. 실제로 어떻게 나뉠지 현실적으로 추정하세요.\n\n"
+        f"[상황]\n{situation}\n\n[진열대]\n{shelf_text(shelf)}\n\n"
+        "1) 100명 중 지금 각 제품을 살 사람과 아무것도 사지 않을 사람(NONE)은 몇 명입니까? (합계 100)\n"
+        "2) 100명 중 각 제품을 앞으로 한 번이라도 사 볼 의향이 있는 사람은 몇 명입니까? (제품마다 0~100, 합계 제한 없음)\n"
+        "3) 이 100명이 각 제품에 낼 수 있는 최대 가격의 중간값(원)은 얼마입니까?\n"
+        "4) 사는 사람과 사지 않는 사람의 주된 이유를 한두 문장으로 요약하세요."
+    )
+
+
+def prob_schema(n: int) -> dict:
+    letters = list(LETTERS[:n])
+    obj = lambda keys: {"type": "object", "additionalProperties": False, "required": keys,
+                        "properties": {k: {"type": "integer"} for k in keys}}
+    return {"type": "object", "additionalProperties": False,
+            "required": ["buy_counts", "try_counts", "median_max_price", "reason"],
+            "properties": {"buy_counts": obj(letters + ["NONE"]), "try_counts": obj(letters),
+                           "median_max_price": obj(letters), "reason": {"type": "string"}}}
+
+
+def mock_prob_response(p: dict, shelf: list[dict], tag: str) -> dict:
+    rng = random.Random(hashlib.sha1(f"prob|{p['uuid']}|{tag}".encode()).hexdigest())
+    letters = list(LETTERS[:len(shelf)])
+    return {"buy_counts": {l: rng.randint(5, 40) for l in letters + ["NONE"]},
+            "try_counts": {l: rng.randint(10, 70) for l in letters},
+            "median_max_price": {l: int(prod["price"] * rng.uniform(0.7, 1.2) // 100 * 100) for l, prod in zip(letters, shelf)},
+            "reason": "(mock 응답)"}
+
+
 def ask_persona(llm, p: dict, products: list[dict], situation: str, seed: int, tag: str = "",
-                system: str = SYSTEM, profile_fn=persona_profile) -> dict:
+                system: str = SYSTEM, profile_fn=persona_profile, mode: str = "single") -> dict:
     """한 페르소나에게 묻고, 진열대 글자(A,B..)를 제품 id로 되돌린 결과를 반환.
     system/profile_fn 을 바꾸면 대조실험(지시문 유무, 프로필 범위)을 할 수 있다."""
     shelf = shuffled_shelf(products, p["uuid"], seed)
     letters = LETTERS[:len(shelf)]
     letter_to_id = {l: prod["id"] for l, prod in zip(letters, shelf)}
+    if mode == "prob":
+        out = llm.ask_json(system, build_prob_prompt(profile_fn(p), situation, shelf), prob_schema(len(shelf)),
+                           mock_fn=lambda: mock_prob_response(p, shelf, tag), tag=f"prob|{tag}")
+        buy = {k: max(0, int(v)) for k, v in out["buy_counts"].items()}
+        total = sum(buy.values())
+        if total <= 0:
+            raise ValueError("구매 인원 합계가 0입니다")
+        share = {letter_to_id.get(k, "NONE"): v / total for k, v in buy.items()}
+        return {
+            "share": share,                                   # 제품별(+NONE) 구매 비율, 합 1
+            "choice": max(share, key=share.get),              # 가장 많은 쪽(비교용)
+            "try_rate": {letter_to_id[l]: min(100, max(0, int(v))) / 100 for l, v in out["try_counts"].items()},
+            "max_price": {letter_to_id[l]: max(0, int(v)) for l, v in out["median_max_price"].items()},
+            "reason": out["reason"],
+            "shelf_order": [prod["id"] for prod in shelf],
+        }
     out = llm.ask_json(
         system,
         build_user_prompt(profile_fn(p), situation, shelf),

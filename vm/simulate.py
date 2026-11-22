@@ -45,6 +45,13 @@ def run(scenario: dict, panel: pd.DataFrame, llm: LLM, seed: int = 42,
         row = {**base, "choice": r["choice"], "reason": r["reason"],
                "concept_position": r["shelf_order"].index(concept) + 1,
                "shelf_order": ",".join(r["shelf_order"]), "error": ""}
+        if "share" in r:  # '100명 분포' 응답
+            for pid, v in r["share"].items():
+                row[f"p_{pid}"] = v
+            for pid in r["try_rate"]:
+                row[f"try_{pid}"] = r["try_rate"][pid]
+                row[f"max_price_{pid}"] = r["max_price"][pid]
+            return i, row
         for pid in r["intent"]:
             row[f"intent_{pid}"] = r["intent"][pid]
             row[f"max_price_{pid}"] = r["max_price"][pid]
@@ -61,8 +68,18 @@ def run(scenario: dict, panel: pd.DataFrame, llm: LLM, seed: int = 42,
     return pd.DataFrame(rows)
 
 
+def shares_of(ok: pd.DataFrame, scenario: dict) -> pd.Series:
+    """제품별(+NONE) 구매 비율. '100명 분포' 응답이면 분포 평균, 아니면 선택 비율."""
+    ids = [p["id"] for p in scenario["products"]] + ["NONE"]
+    if f"p_{ids[0]}" in ok:
+        return pd.Series({pid: ok[f"p_{pid}"].mean() if f"p_{pid}" in ok else 0.0 for pid in ids}).fillna(0)
+    return ok["choice"].value_counts(normalize=True).reindex(ids, fill_value=0)
+
+
 def quick_summary(df: pd.DataFrame, scenario: dict) -> str:
     ok = df[df["error"] == ""]
+    if f"p_{scenario['concept_id']}" in ok:
+        return prob_summary(ok, df, scenario)
     c = scenario["concept_id"]
     names = {p["id"]: p["name"] for p in scenario["products"]}
     names["NONE"] = "구매 안 함"
@@ -81,6 +98,24 @@ def quick_summary(df: pd.DataFrame, scenario: dict) -> str:
     return "\n".join(lines)
 
 
+def prob_summary(ok: pd.DataFrame, df: pd.DataFrame, scenario: dict) -> str:
+    c = scenario["concept_id"]
+    names = {p["id"]: p["name"] for p in scenario["products"]}
+    names["NONE"] = "구매 안 함"
+    price = next(p["price"] for p in scenario["products"] if p["id"] == c)
+    share = shares_of(ok, scenario).rename(index=names).mul(100).round(1).sort_values(ascending=False)
+    lines = [f"응답 {len(ok)}/{len(df)}명 (실패 {len(df) - len(ok)}명)  ※ 100명 분포 응답 방식",
+             "", "[구매 비율 %] (페르소나별 100명 분포의 평균)", share.to_string(), ""]
+    lines.append(f"[신제품] 앞으로 사 볼 의향 {ok[f'try_{c}'].mean() * 100:.1f}%")
+    wtp = ok[f"max_price_{c}"]
+    lines.append(f"[신제품] 지불의사가격(중간값들의 중앙값) {wtp.median():,.0f}원 (판매가 {price:,}원), "
+                 f"판매가 이상인 페르소나 {wtp.ge(price).mean() * 100:.1f}%")
+    lines.append("")
+    lines.append("[연령대별 신제품 구매 비율 %]")
+    lines.append(ok.groupby("age_group", observed=True)[f"p_{c}"].mean().mul(100).round(1).to_string())
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="config/scenario_example.json")
@@ -91,20 +126,22 @@ def main():
     ap.add_argument("--mock", action="store_true", help="API 없이 가짜 응답으로 파이프라인만 시험")
     ap.add_argument("--model")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--mode", choices=["single", "prob"], default="prob",
+                    help="prob: '비슷한 100명 분포'로 묻기(기본, 설문 재현 검증으로 채택) / single: 한 사람의 선택 하나")
     a = ap.parse_args()
 
     scenario = load_scenario(a.scenario)
     panel = sample_panel(load_pool(), a.n, a.seed, a.age_min, a.age_max)
     llm = LLM(a.model, mock=a.mock)
     t0 = time.time()
-    df = run(scenario, panel, llm, a.seed, workers=a.workers,
+    df = run(scenario, panel, llm, a.seed, workers=a.workers, mode=a.mode,
              progress=lambda d, n: print(f"진행 {d}/{n}", flush=True) if d % 20 == 0 or d == n else None)
     print()
 
     run_dir = OUT_DIR / f"run_{datetime.now():%Y%m%d_%H%M%S_%f}{'_mock' if a.mock else ''}"
     run_dir.mkdir(parents=True)
     df.to_csv(run_dir / "responses.csv", index=False, encoding="utf-8-sig")
-    meta = {"scenario": scenario, "n": a.n, "seed": a.seed, "model": "mock" if a.mock else llm.model,
+    meta = {"scenario": scenario, "n": a.n, "mode": a.mode, "seed": a.seed, "model": "mock" if a.mock else llm.model,
             "age_min": a.age_min, "age_max": a.age_max, "api_calls": llm.api_calls,
             "cache_hits": llm.cache_hits, "seconds": round(time.time() - t0, 1)}
     (run_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

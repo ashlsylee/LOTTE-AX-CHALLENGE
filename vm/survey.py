@@ -12,6 +12,7 @@
     python -m vm.survey --n-per-age 10 --mock
     python -m vm.survey --n-per-age 10                    # 5개 연령대 × 10명 × 조건 5개
     python -m vm.survey --n-per-age 20 --only base balanced
+    python -m vm.survey --n-per-age 10 --only base prob     # '100명 분포 응답' 방식 비교
 """
 import argparse
 import hashlib
@@ -62,14 +63,37 @@ SCHEMA = {
 }
 
 
+# '100명 분포 응답': 한 사람의 대표 답 하나 대신, 같은 프로필의 100명이 어떻게 나뉠지 묻는다.
+# 1차 실행에서 1순위가 몇 종류에만 몰리고(우유류 0명), 극단 답('먹어본 적 없음')이 사라진 문제를 줄이기 위한 방식.
+PROB_TEXT = (
+    "[설문]\n아래는 식품 소비에 관한 설문입니다. 이 프로필과 나이·성별·생활이 비슷한 사람 100명이 있다고 생각하세요. "
+    "같은 조건이어도 사람마다 취향과 습관은 다릅니다. 100명이 실제로 어떻게 나뉠지 현실적으로 추정하세요.\n\n"
+    "Q1. 100명 중 각 음료를 '평소 가장 좋아하는 음료 1순위'로 꼽을 사람은 몇 명입니까? (합계 100)\n"
+    + "\n".join(f"  {i}. {o}" for i, o in enumerate(FAV_OPTIONS, 1)) +
+    "\n\nQ2. 100명 중 제로 음료(제로콜라, 제로사이다 등 설탕 대신 대체당을 쓴 음료)를 아래 빈도로 마시는 사람은 각각 몇 명입니까? (합계 100)\n"
+    + "\n".join(f"  - {z}" for z in ZERO_LEVELS)
+)
+PROB_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["fav_counts", "zero_counts"],
+    "properties": {
+        "fav_counts": {"type": "object", "additionalProperties": False, "required": OPT_NUMS,
+                       "properties": {k: {"type": "integer"} for k in OPT_NUMS}},
+        "zero_counts": {"type": "object", "additionalProperties": False, "required": ZERO_LEVELS,
+                        "properties": {z: {"type": "integer"} for z in ZERO_LEVELS}},
+    },
+}
+
+
 def make_conditions(llm) -> dict:
-    """설문에는 진열대가 없으므로 지시문과 프로필 범위만 바꾼다."""
+    """설문에는 진열대가 없으므로 지시문·프로필 범위·응답 방식만 바꾼다."""
     return {
         "base": {"system": SYSTEM, "profile_fn": persona_profile},
         "no_antibias": {"system": SYSTEM_NO_ANTIBIAS, "profile_fn": persona_profile},
         "balanced": {"system": SYSTEM_BALANCED, "profile_fn": persona_profile},
         "full_persona": {"system": SYSTEM, "profile_fn": persona_profile_full},
         "habit_first": {"system": SYSTEM_BALANCED, "profile_fn": make_habit_profile(llm)},
+        # base와 지시문·프로필은 같고 응답 방식만 다르다(방식 자체의 효과를 분리하기 위함)
+        "prob": {"system": SYSTEM, "profile_fn": persona_profile, "mode": "prob"},
     }
 
 
@@ -88,7 +112,22 @@ def mock_answer(p: dict) -> dict:
     return {"fav1": picks[0], "fav2": picks[1], "fav3": picks[2], "zero_drink": rng.choice(ZERO_LEVELS)}
 
 
-def ask_all(llm, panel: pd.DataFrame, system: str, profile_fn, tag: str, workers: int = 8) -> pd.DataFrame:
+def mock_prob(p: dict) -> dict:
+    rng = random.Random(hashlib.sha1(f"prob|{p['uuid']}".encode()).hexdigest())
+    return {"fav_counts": {k: rng.randint(0, 12) for k in OPT_NUMS},
+            "zero_counts": {z: rng.randint(0, 40) for z in ZERO_LEVELS}}
+
+
+def _normalize(counts: dict) -> dict:
+    vals = {k: max(0, int(v)) for k, v in counts.items()}
+    total = sum(vals.values())
+    if total <= 0:
+        raise ValueError("분포 합계가 0입니다")
+    return {k: v / total for k, v in vals.items()}
+
+
+def ask_all(llm, panel: pd.DataFrame, system: str, profile_fn, tag: str, workers: int = 8,
+            mode: str = "single") -> pd.DataFrame:
     recs = panel.to_dict("records")
     rows = [None] * len(recs)
 
@@ -96,10 +135,23 @@ def ask_all(llm, panel: pd.DataFrame, system: str, profile_fn, tag: str, workers
         p = recs[i]
         base = {"uuid": p["uuid"], "age": p["age"], "age_group": p["age_group"], "sex": p["sex"]}
         try:
-            user = f"[나의 프로필]\n{profile_fn(p)}\n\n{SURVEY_TEXT}"
-            out = llm.ask_json(system, user, SCHEMA, mock_fn=lambda: mock_answer(p), tag=f"survey|{tag}")
+            if mode == "prob":
+                user = f"[프로필]\n{profile_fn(p)}\n\n{PROB_TEXT}"
+                out = llm.ask_json(system, user, PROB_SCHEMA, mock_fn=lambda: mock_prob(p), tag=f"survey|{tag}")
+                fav_p, zero_p = _normalize(out["fav_counts"]), _normalize(out["zero_counts"])
+            else:
+                user = f"[나의 프로필]\n{profile_fn(p)}\n\n{SURVEY_TEXT}"
+                out = llm.ask_json(system, user, SCHEMA, mock_fn=lambda: mock_answer(p), tag=f"survey|{tag}")
         except Exception as e:
             return i, {**base, "error": f"{type(e).__name__}: {e}"[:300]}
+        if mode == "prob":
+            grp = {g: 0.0 for g in FAV_GROUPS}
+            for k, v in fav_p.items():
+                grp[fav_group(FAV_OPTIONS[int(k) - 1])] += v
+            top = FAV_OPTIONS[int(max(fav_p, key=fav_p.get)) - 1]
+            return i, {**base, "fav1": top, "fav1_group": fav_group(top),
+                       "zero_drink": max(zero_p, key=zero_p.get), "error": "",
+                       **{f"pf_{g}": v for g, v in grp.items()}, **{f"pz_{z}": v for z, v in zero_p.items()}}
         fav1 = FAV_OPTIONS[int(out["fav1"]) - 1]
         return i, {**base, "fav1": fav1, "fav1_group": fav_group(fav1),
                    "fav2": out["fav2"], "fav3": out["fav3"], "zero_drink": out["zero_drink"], "error": ""}
@@ -122,9 +174,19 @@ def sim_dist(df: pd.DataFrame, col: str, levels: list) -> dict:
     return out
 
 
-def evaluate(df: pd.DataFrame, ref: dict) -> dict:
-    fav = sim_dist(df, "fav1_group", FAV_GROUPS)
-    zero = sim_dist(df, "zero_drink", ZERO_LEVELS)
+def prob_dist(df: pd.DataFrame, prefix: str, levels: list) -> dict:
+    """'100명 분포' 응답을 연령대별로 평균한다."""
+    ok = df[df["error"] == ""]
+    return {age: {lv: float(ok[ok["age_group"] == age][f"{prefix}{lv}"].mean()) for lv in levels}
+            for age in AGE_BUCKETS}
+
+
+def evaluate(df: pd.DataFrame, ref: dict, use_prob: bool = False) -> dict:
+    if use_prob:
+        fav, zero = prob_dist(df, "pf_", FAV_GROUPS), prob_dist(df, "pz_", ZERO_LEVELS)
+    else:
+        fav = sim_dist(df, "fav1_group", FAV_GROUPS)
+        zero = sim_dist(df, "zero_drink", ZERO_LEVELS)
     real_four = [sum(ref["fav1_by_age"][a][g] for g in FOUR) * 100 for a in AGE_BUCKETS]
     sim_four = [sum(fav[a][g] for g in FOUR) * 100 for a in AGE_BUCKETS]
     corr = pd.Series(sim_four).corr(pd.Series(real_four)) if pd.Series(sim_four).std() > 0 else float("nan")
@@ -162,7 +224,14 @@ def main():
         print(f"\n=== {name} ===")
         df = ask_all(llm, panel, tag=name, workers=a.workers, **conds[name])
         df.to_csv(out_dir / f"responses_{name}.csv", index=False, encoding="utf-8-sig")
-        rows.append({"condition": name, **evaluate(df, ref)})
+        if (df["error"] == "").sum() == 0:
+            raise SystemExit(f"[{name}] 응답이 모두 실패했습니다: {df['error'].iloc[0]}")
+        if conds[name].get("mode") == "prob":
+            # 같은 응답을 두 가지로 집계: 분포 평균(prob) vs 가장 큰 답 하나(prob(argmax))
+            rows.append({"condition": name, **evaluate(df, ref, use_prob=True)})
+            rows.append({"condition": f"{name}(argmax)", **evaluate(df, ref)})
+        else:
+            rows.append({"condition": name, **evaluate(df, ref)})
 
     real = {"condition": "실제(KREI)", "fav_mae": 0.0, "four_rate_mae": 0.0, "four_age_corr": 1.0,
             **{f"four_{a}": round(sum(ref["fav1_by_age"][a][g] for g in FOUR) * 100, 1) for a in AGE_BUCKETS},

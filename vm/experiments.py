@@ -35,7 +35,7 @@ from .agent import SYSTEM, persona_profile, persona_profile_full
 from .config import OUT_DIR
 from .llm import LLM
 from .personas import load_pool, sample_panel
-from .simulate import load_scenario, run
+from .simulate import load_scenario, run, shares_of
 
 SYSTEM_NO_ANTIBIAS = """당신은 아래 프로필을 가진 실제 한국 소비자입니다. 이 사람으로서 판단하세요.
 - 답은 이 사람의 말투로, 짧고 구체적으로 쓰세요."""
@@ -122,6 +122,8 @@ def make_conditions(scenario: dict, llm=None) -> dict:
     sc = copy.deepcopy(scenario)
     sc["situation"] = NEUTRAL_SITUATION
     conds["balanced_neutral"] = (sc, {**base_kw, "system": SYSTEM_BALANCED})
+    # 응답 방식: '100명 분포'(설문 재현 검증에서 채택). base와 다른 것은 응답 방식뿐.
+    conds["prob"] = (scenario, {**base_kw, "mode": "prob"})
     if llm is not None:
         conds["habit_first"] = (sc, {"system": SYSTEM_BALANCED, "profile_fn": make_habit_profile(llm)})
     return conds
@@ -156,16 +158,20 @@ def persona_grounding(df: pd.DataFrame, panel: pd.DataFrame) -> float:
 def summarize(name: str, df: pd.DataFrame, scenario: dict, panel: pd.DataFrame) -> dict:
     ok = df[df["error"] == ""]
     ids = [p["id"] for p in scenario["products"]] + ["NONE"]
-    shares = ok["choice"].value_counts(normalize=True).reindex(ids, fill_value=0)
+    shares = shares_of(ok, scenario)
     c = scenario["concept_id"]
+    is_prob = f"p_{c}" in ok
     row = {"condition": name, "n_ok": len(ok)}
     for pid in ids:
         row[f"share_{pid}"] = round(shares[pid] * 100, 1)
     row["top_share"] = round(shares.max() * 100, 1)
     row["diversity"] = round(entropy(shares), 3)
-    row["concept_intent"] = round(ok[f"intent_{c}"].mean(), 2)
-    row["concept_intent_sd"] = round(ok[f"intent_{c}"].std(), 2)
-    row["intent5_any"] = round((ok[[f"intent_{p['id']}" for p in scenario["products"]]] == 5).any(axis=1).mean() * 100, 1)
+    if is_prob:  # 100명 분포 응답에는 1~5점 구매의향이 없다
+        row["concept_try%"] = round(ok[f"try_{c}"].mean() * 100, 1)
+    else:
+        row["concept_intent"] = round(ok[f"intent_{c}"].mean(), 2)
+        row["concept_intent_sd"] = round(ok[f"intent_{c}"].std(), 2)
+        row["intent5_any"] = round((ok[[f"intent_{p['id']}" for p in scenario["products"]]] == 5).any(axis=1).mean() * 100, 1)
     row["persona_grounding"] = round(persona_grounding(ok, panel) * 100, 1)
     row["mentions_thirst"] = round(ok["reason"].str.contains("목|축이|갈증").mean() * 100, 1)
     row["mentions_price"] = round(ok["reason"].str.contains(r"원|가격|싼|비싸|아깝").mean() * 100, 1)
