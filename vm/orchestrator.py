@@ -44,11 +44,18 @@ AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 
 1. 먼저 check_reliability로 이 패널을 어디까지 믿을 수 있는지 확인하세요.
 2. 질문에 맞게 계획을 세우고 필요한 도구만 호출하세요. 타깃 연령이 있으면 age_min/age_max를 쓰세요.
 3. 결과에 쏠림이나 이상한 점이 보이면 get_reasons로 이유를 확인하거나 비교 실험을 추가하세요.
-4. 예산(남은 페르소나 호출 수)을 확인하며 효율적으로 쓰세요.
+4. 예산을 먼저 나눠 계획하세요. 기본 인원은 50명으로 하고, 가격·문구 비교 실험에 쓸 예산을 남기세요.
+   (예: 예산 150이면 기본 50명 1회 + 가격 2안 × 50명). 같은 조건의 실행을 반복하지 마세요.
+6. 요청의 핵심 질문(예: 가격이 적당한가 → 가격 비교)에 답하는 실험을 가장 먼저 하세요.
+   예산 부족 오류가 나면 다른 실험으로 넘어가지 말고, 안 개수나 인원을 줄여 핵심 실험을 다시 시도하세요.
 5. 마지막에 반드시 write_report로 한국어 마크다운 리포트를 제출하세요.
 
 리포트 규칙
 - 숫자는 반드시 도구 결과에 있는 값만 인용하세요. 추측한 숫자를 만들지 마세요.
+- concept_buy_ci95_%는 페르소나들 사이의 의견 일치 범위일 뿐, 실제 시장의 오차 범위가 아닙니다.
+  실제와의 오차는 check_reliability의 four_rate_mae(약 2%p)·fav_mae(약 3%p) 수준이므로,
+  두 조건의 차이가 3%p보다 작으면 "차이가 뚜렷하지 않다"고 쓰고 단정하지 마세요.
+- 연령 표현: '30대'는 30~39세입니다. '20~30대'면 age_min 20, age_max 39.
 - 구성: 요약(결론 2~3줄) / 근거(실행한 실험과 수치) / 타깃·가격·문구 제안 / 신뢰도와 한계 / 다음 단계(실제 조사로 확인할 것)
 - 신뢰도: check_reliability 결과를 근거로, 어느 부분은 믿을 만하고 어느 부분은 조심해야 하는지 쓰세요.
 - 이 결과는 실제 소비자 조사를 대신하지 않는 '앞단 필터'임을 명시하세요."""
@@ -63,7 +70,8 @@ TOOLS = [
         "description": "가상 편의점 진열대 시뮬레이션. 신제품의 가격·이름·설명을 바꿔 실행할 수 있다. 구매 비율, 사 볼 의향, 지불의사가격, 연령대별 결과를 돌려준다.",
         "parameters": {"type": "object", "additionalProperties": False, "properties": {
             "n": {"type": "integer", "description": f"패널 인원(최대 {MAX_PANEL})"},
-            "age_min": {"type": "integer"}, "age_max": {"type": "integer"},
+            "age_min": {"type": "integer", "description": "만 나이. 예: '20~30대'면 20"},
+            "age_max": {"type": "integer", "description": "만 나이. 예: '20~30대'면 39 (30대 = 30~39세)"},
             "concept_price": {"type": "integer"}, "concept_name": {"type": "string"},
             "concept_description": {"type": "string"}}}}},
     {"type": "function", "function": {
@@ -94,6 +102,14 @@ TOOLS = [
 ]
 
 
+def _bootstrap_ci(values: pd.Series, n_boot: int = 1000) -> list:
+    import numpy as np
+    rng = np.random.default_rng(0)
+    arr = values.to_numpy()
+    means = [rng.choice(arr, size=len(arr), replace=True).mean() for _ in range(n_boot)]
+    return [float(np.percentile(means, 2.5)), float(np.percentile(means, 97.5))]
+
+
 class Toolbox:
     """에이전트가 호출하는 도구. 기존 시뮬레이션 모듈을 그대로 감싼다."""
 
@@ -106,7 +122,7 @@ class Toolbox:
 
     # ---------- 공통 ----------
     def _panel(self, n, age_min, age_max):
-        n = max(10, min(int(n or 60), MAX_PANEL))
+        n = max(10, min(int(n or 50), MAX_PANEL))
         return sample_panel(self.pool, n, self.seed, age_min, age_max)
 
     def _charge(self, n_calls: int):
@@ -130,6 +146,8 @@ class Toolbox:
             "buy_share_%": {names[k]: round(v * 100, 1) for k, v in shares_of(ok, scenario).items()},
             "concept_try_%": round(ok[f"try_{c}"].mean() * 100, 1),
             "concept_wtp_median": int(ok[f"max_price_{c}"].median()),
+            # 페르소나 단위 부트스트랩 95% 구간(추가 API 비용 없음). 페르소나 간 일치 범위이며 실제 시장 오차가 아니다.
+            "concept_buy_ci95_%": [round(v * 100, 1) for v in _bootstrap_ci(ok[f"p_{c}"])],
             "concept_buy_by_age_%": ok.groupby("age_group", observed=True)[f"p_{c}"].mean().mul(100).round(1).to_dict(),
             "new_persona_calls": used, "budget_left": self.budget_left,
         }
@@ -214,6 +232,64 @@ def scripted_plan(request: str):
     yield "compare_prices", {"prices": [1700, 1900, 2100], "n": 30, "age_min": 20, "age_max": 39}
 
 
+def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 10, model: str | None = None,
+              agent_model: str | None = None, mock: bool = False, on_step=None) -> dict:
+    """에이전트 1회 실행. CLI와 화면(app.py)이 같이 쓴다. on_step(step, tool, args, result)로 진행을 알린다."""
+    load_dotenv()
+    llm = LLM(model, mock=mock)
+    tb = Toolbox(scenario, llm, budget)
+    out_dir = OUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
+    out_dir.mkdir(parents=True)
+    trace, report = [], None
+
+    def log(step, name, args, result):
+        trace.append({"step": step, "tool": name, "args": args, "result": result})
+        if on_step:
+            on_step(step, name, args, result)
+
+    if mock:
+        for step, (name, args) in enumerate(scripted_plan(request), 1):
+            log(f"{step}-1", name, args, call_tool(tb, name, args))
+        report = "# (mock) 리포트\n\n도구 연결 시험용 실행입니다. 실제 리포트는 API로 실행하세요.\n"
+    else:
+        from openai import OpenAI
+        client = OpenAI()
+        agent_model = agent_model or os.getenv("VM_AGENT_MODEL") or llm.model
+        context = (f"[요청]\n{request}\n\n[기본 시나리오]\n{json.dumps(scenario, ensure_ascii=False)}\n\n"
+                   f"[예산] 페르소나 호출 {budget}회, 최대 {max_steps}단계")
+        messages = [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": context}]
+        for step in range(1, max_steps + 1):
+            force = step == max_steps  # 마지막 단계에서는 리포트를 강제
+            resp = client.chat.completions.create(
+                model=agent_model, messages=messages, tools=TOOLS,
+                tool_choice={"type": "function", "function": {"name": "write_report"}} if force else "auto")
+            msg = resp.choices[0].message
+            messages.append(msg.model_dump(exclude_none=True))
+            if not msg.tool_calls:
+                messages.append({"role": "user", "content": "도구를 호출하거나 write_report로 리포트를 제출하세요."})
+                continue
+            for k, tc in enumerate(msg.tool_calls, 1):
+                args = json.loads(tc.function.arguments or "{}")
+                if tc.function.name == "write_report":
+                    report = args.get("markdown", "")
+                    log(f"{step}-{k}", "write_report", {}, {"chars": len(report)})
+                    result = {"ok": True}
+                else:
+                    result = call_tool(tb, tc.function.name, args)
+                    log(f"{step}-{k}", tc.function.name, args, result)
+                messages.append({"role": "tool", "tool_call_id": tc.id,
+                                 "content": json.dumps(result, ensure_ascii=False)})
+            if report is not None:
+                break
+
+    (out_dir / "trace.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "report.md").write_text(report or "(리포트 없음)", encoding="utf-8")
+    (out_dir / "request.json").write_text(json.dumps({"request": request, "scenario": scenario, "budget": budget},
+                                                     ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"report": report, "trace": trace, "out_dir": str(out_dir),
+            "api_calls": llm.api_calls, "budget_left": tb.budget_left, "budget": budget}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("request", help="마케터의 요청(자연어)")
@@ -225,58 +301,13 @@ def main():
     ap.add_argument("--mock", action="store_true")
     a = ap.parse_args()
 
-    load_dotenv()
-    llm = LLM(a.model, mock=a.mock)
-    tb = Toolbox(load_scenario(a.scenario), llm, a.budget)
-    out_dir = OUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if a.mock else ''}"
-    out_dir.mkdir(parents=True)
-    trace, report = [], None
-
-    def log(step, name, args, result):
-        trace.append({"step": step, "tool": name, "args": args, "result": result})
+    def show(step, name, args, result):
         short = json.dumps(result, ensure_ascii=False)
         print(f"\n[{step}] {name}({json.dumps(args, ensure_ascii=False)})\n    → {short[:400]}{'…' if len(short) > 400 else ''}")
 
-    if a.mock:
-        for step, (name, args) in enumerate(scripted_plan(a.request), 1):
-            log(step, name, args, call_tool(tb, name, args))
-        report = "# (mock) 리포트\n\n도구 연결 시험용 실행입니다. 실제 리포트는 API로 실행하세요.\n"
-    else:
-        from openai import OpenAI
-        client = OpenAI()
-        agent_model = a.agent_model or os.getenv("VM_AGENT_MODEL") or llm.model
-        sc = tb.base_scenario
-        context = (f"[요청]\n{a.request}\n\n[기본 시나리오]\n{json.dumps(sc, ensure_ascii=False)}\n\n"
-                   f"[예산] 페르소나 호출 {a.budget}회, 최대 {a.max_steps}단계")
-        messages = [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": context}]
-        for step in range(1, a.max_steps + 1):
-            force = step == a.max_steps  # 마지막 단계에서는 리포트를 강제
-            resp = client.chat.completions.create(
-                model=agent_model, messages=messages, tools=TOOLS,
-                tool_choice={"type": "function", "function": {"name": "write_report"}} if force else "auto")
-            msg = resp.choices[0].message
-            messages.append(msg.model_dump(exclude_none=True))
-            if not msg.tool_calls:
-                messages.append({"role": "user", "content": "도구를 호출하거나 write_report로 리포트를 제출하세요."})
-                continue
-            for tc in msg.tool_calls:
-                args = json.loads(tc.function.arguments or "{}")
-                if tc.function.name == "write_report":
-                    report = args.get("markdown", "")
-                    log(step, "write_report", {}, {"chars": len(report)})
-                    result = {"ok": True}
-                else:
-                    result = call_tool(tb, tc.function.name, args)
-                    log(step, tc.function.name, args, result)
-                messages.append({"role": "tool", "tool_call_id": tc.id,
-                                 "content": json.dumps(result, ensure_ascii=False)})
-            if report is not None:
-                break
-
-    (out_dir / "trace.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
-    (out_dir / "report.md").write_text(report or "(리포트 없음)", encoding="utf-8")
-    print(f"\n\n===== 리포트 =====\n{report}\n")
-    print(f"페르소나 새 응답 {llm.api_calls}개 (예산 {a.budget}, 남음 {tb.budget_left})\n저장: {out_dir}")
+    r = run_agent(a.request, load_scenario(a.scenario), a.budget, a.max_steps, a.model, a.agent_model, a.mock, show)
+    print(f"\n\n===== 리포트 =====\n{r['report']}\n")
+    print(f"페르소나 새 응답 {r['api_calls']}개 (예산 {r['budget']}, 남음 {r['budget_left']})\n저장: {r['out_dir']}")
 
 
 if __name__ == "__main__":
