@@ -297,10 +297,10 @@ def scripted_plan(request: str):
 
 
 def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 10, model: str | None = None,
-              agent_model: str | None = None, mock: bool = False, on_step=None) -> dict:
+              agent_model: str | None = None, mock: bool = False, on_step=None, api_key: str | None = None) -> dict:
     """에이전트 1회 실행. CLI와 화면(app.py)이 같이 쓴다. on_step(step, tool, args, result)로 진행을 알린다."""
     load_dotenv()
-    llm = LLM(model, mock=mock)
+    llm = LLM(model, mock=mock, api_key=api_key)
     tb = Toolbox(scenario, llm, budget)
     out_dir = OUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
     out_dir.mkdir(parents=True)
@@ -317,7 +317,7 @@ def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 
         report = "# (mock) 리포트\n\n도구 연결 시험용 실행입니다. 실제 리포트는 API로 실행하세요.\n"
     else:
         from openai import OpenAI
-        client = OpenAI()
+        client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
         agent_model = agent_model or os.getenv("VM_AGENT_MODEL") or llm.model
         context = (f"[요청]\n{request}\n\n[기본 시나리오]\n{json.dumps(scenario, ensure_ascii=False)}\n\n"
                    f"[예산] 페르소나 호출 {budget}회, 최대 {max_steps}단계")

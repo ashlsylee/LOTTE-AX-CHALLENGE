@@ -17,7 +17,8 @@ from .config import DEFAULT_MODEL, OUT_DIR
 
 class LLM:
     def __init__(self, model: str | None = None, mock: bool = False,
-                 cache_path: Path = OUT_DIR / "llm_cache.jsonl"):
+                 cache_path: Path = OUT_DIR / "llm_cache.jsonl", api_key: str | None = None):
+        """api_key: 화면에서 사용자가 입력한 키(이번 실행에만 사용, 저장하지 않음). 없으면 .env/환경변수."""
         load_dotenv()
         self.model = model or os.getenv("VM_MODEL") or DEFAULT_MODEL
         self.mock = mock
@@ -32,11 +33,12 @@ class LLM:
                 rec = json.loads(line)
                 self.cache[rec["key"]] = rec["text"]
         if not mock:
-            if not os.getenv("OPENAI_API_KEY"):
+            key = api_key or os.getenv("OPENAI_API_KEY")
+            if not key:
                 raise RuntimeError(
-                    "OPENAI_API_KEY가 없습니다. .env.example을 .env로 복사해 키를 넣거나 --mock으로 실행하세요.")
+                    "OpenAI API 키가 없습니다. 화면 왼쪽에 키를 입력하거나, .env에 OPENAI_API_KEY를 넣거나, mock으로 실행하세요.")
             from openai import OpenAI
-            self.client = OpenAI()
+            self.client = OpenAI(api_key=key)
 
     def ask_json(self, system: str, user: str, schema: dict, mock_fn, tag: str = "") -> dict:
         """JSON 스키마에 맞는 응답을 dict로 돌려준다. tag는 반복 샘플링 구분용."""

@@ -16,7 +16,10 @@ import streamlit as st
 
 from vm.config import OUT_DIR, PERSONA_PATH
 
-st.set_page_config(page_title="칠성 버추얼 마켓", page_icon="🥤", layout="wide")
+# ---- 서비스 이름: 여기 두 줄만 바꾸면 화면 전체(탭 제목, 상단 제목)에 반영된다
+APP_NAME = "칠성 버추얼 마켓"
+APP_TAGLINE = "AI 소비자 패널로 신제품 컨셉을 미리 걸러내고, 그 결과를 실제 설문으로 검증해 함께 보여줍니다."
+st.set_page_config(page_title=APP_NAME, page_icon="🥤", layout="wide")
 
 # ------------------------------------------------------------------ 배포 설정
 try:  # Streamlit Cloud의 Secrets → 환경변수 (로컬에서는 .env 사용)
@@ -34,22 +37,44 @@ from vm.simulate import load_scenario, run, shares_of  # noqa: E402
 
 # ------------------------------------------------------------------ 디자인
 # 색·글씨 크기는 여기서만 바꾸면 화면 전체에 적용된다. (rem = 본문 글씨 크기 배수, 1rem ≈ 16px)
-# 라이트/다크는 브라우저(시스템) 설정 또는 오른쪽 위 ⋮ → Settings → Theme 에서 바뀌고, 포인트 컬러(레드)는 같다.
+# 라이트/다크는 화면 왼쪽 위 버튼으로 바꾼다. Streamlit 기본 테마는 라이트로 고정하고, 다크는 아래 CSS가 덮어쓴다.
 RED, RED_DARK = "#E4002B", "#7A0016"
-try:
-    DARK = (st.context.theme.type or "dark") == "dark"
-except Exception:
-    DARK = True
+st.session_state.setdefault("theme", "dark")  # 기본은 다크. 왼쪽 위 버튼으로 전환(새로고침 없음)
+DARK = st.session_state["theme"] == "dark"
 T = dict(  # 테마별 색
     bg="#0A0A0C" if DARK else "#F7F7F8", panel="#141418" if DARK else "#FFFFFF",
     side="#0F0F13" if DARK else "#FFFFFF", border="rgba(255,255,255,0.08)" if DARK else "rgba(0,0,0,0.08)",
-    text="#F4F4F5" if DARK else "#18181B", sub="#D4D4D8" if DARK else "#3F3F46", muted="#A1A1AA" if DARK else "#71717A",
+    text="#FFFFFF" if DARK else "#18181B", sub="#FFFFFF" if DARK else "#3F3F46", muted="#F4F4F5" if DARK else "#71717A",
     card_top="#1A1014" if DARK else "#FFF5F6", hero_end="#141418" if DARK else "#FFFFFF",
     hero_start="#1A0A0F" if DARK else "#FFE8EC", chip_text="#FCA5B1" if DARK else "#B3001F",
     grid="#27272A" if DARK else "#E4E4E7", node_fill="#18181B" if DARK else "#FFFFFF",
     node_line="#3F3F46" if DARK else "#D4D4D8", shadow="none" if DARK else "0 6px 24px rgba(0,0,0,0.06)",
 )
 BG, PANEL, BORDER, MUTED = T["bg"], T["panel"], T["border"], T["muted"]
+FIELD = "#1C1C22"
+DARK_WIDGETS = f"""
+[data-testid="stAppViewContainer"], [data-testid="stSidebar"], [data-testid="stHeader"] {{ color: #FFFFFF; }}
+[data-testid="stAppViewContainer"] p, [data-testid="stAppViewContainer"] li, [data-testid="stAppViewContainer"] label,
+[data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span,
+h1, h2, h3, h4, h5, h6, [data-testid="stCaptionContainer"], .stCaption,
+[data-testid="stWidgetLabel"] *, [data-testid="stMarkdownContainer"] {{ color: #FFFFFF !important; }}
+[data-baseweb="input"], [data-baseweb="base-input"], [data-baseweb="textarea"], [data-baseweb="select"] > div,
+[data-testid="stNumberInput"] > div > div {{ background: {FIELD} !important; border-color: #3F3F46 !important; }}
+input, textarea {{ color: #FFFFFF !important; -webkit-text-fill-color: #FFFFFF !important; background: {FIELD} !important; }}
+input::placeholder, textarea::placeholder {{ color: #A1A1AA !important; -webkit-text-fill-color: #A1A1AA !important; }}
+[data-testid="stNumberInputStepDown"], [data-testid="stNumberInputStepUp"] {{ background: {FIELD} !important; color: #FFFFFF !important; }}
+[data-testid="stBaseButton-secondary"] {{ background: {FIELD} !important; color: #FFFFFF !important; border-color: #3F3F46 !important; }}
+[data-testid="stExpander"] details, [data-testid="stExpander"] summary {{ background: transparent !important; color: #FFFFFF !important; }}
+[data-testid="stExpander"] summary:hover {{ color: {RED} !important; }}
+[data-baseweb="popover"] ul, [data-baseweb="menu"], [data-baseweb="popover"] li {{ background: {FIELD} !important; color: #FFFFFF !important; }}
+[data-baseweb="tab"] p {{ color: #FFFFFF !important; }}
+[data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"], [data-testid="stSliderThumbValue"] {{ color: #FFFFFF !important; }}
+[data-testid="stJson"] {{ background: {FIELD} !important; }}
+code {{ background: {FIELD} !important; color: #FFFFFF !important; }}
+/* 표(캔버스로 그려져 CSS가 안 먹음)는 색을 반전해 어둡게 */
+[data-testid="stDataFrame"], [data-testid="stDataEditor"] {{ filter: invert(0.92) hue-rotate(180deg); border-radius: 10px; }}
+[data-testid="stStatusWidget"], [data-testid="stStatus"] {{ color: #FFFFFF !important; }}
+"""
 CSS = f"""
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
@@ -102,18 +127,35 @@ p, li {{ line-height: 1.7; }}
 [data-testid="stMetric"] {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 16px; padding: 0.9rem 1rem; }}
 [data-testid="stMetricValue"] {{ font-size: 1.6rem !important; font-weight: 800; }}
 [data-testid="stExpander"] {{ border: 1px solid {BORDER}; border-radius: 14px; }}
+{DARK_WIDGETS if DARK else ""}
+/* 한 줄의 카드들은 같은 높이(가장 큰 카드에 맞춤) */
+.grid {{ display: grid; gap: 1rem; margin: 0.2rem 0 1rem 0; align-items: stretch; }}
+.grid .card {{ height: 100%; box-sizing: border-box; }}
+.g2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .g3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+.g4 {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }}
+@media (max-width: 900px) {{ .g3, .g4 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+@media (max-width: 600px) {{ .g2, .g3, .g4 {{ grid-template-columns: 1fr; }} }}
+.sources {{ margin-top: 1rem; font-size: 0.82rem; color: {T["sub"]}; line-height: 1.8; }}
+.sources a {{ color: {T["chip_text"]}; text-decoration: none; border-bottom: 1px solid rgba(228,0,43,0.4); }}
 </style>
 """
+CSS = "\n".join(line for line in CSS.splitlines() if line.strip())  # 빈 줄이 있으면 스타일 블록이 끊겨 글자로 보인다
 st.markdown(CSS, unsafe_allow_html=True)
 
 
 def style_chart(ch):
-    return ch.configure_view(strokeWidth=0).configure_axis(labelColor=T["sub"], titleColor=MUTED, gridColor=T["grid"]
+    return ch.configure(background="transparent").configure_view(strokeWidth=0).configure_axis(labelColor=T["sub"], titleColor=MUTED, gridColor=T["grid"]
                                                            ).configure_legend(labelColor=T["sub"])
 
 
 def card(label, value, sub=""):
     return f'<div class="card"><div class="lbl">{label}</div><div class="num">{value}</div><div class="sub">{sub}</div></div>'
+
+
+def grid(items, n=None):
+    """카드 여러 개를 한 줄에 같은 높이로 놓는다."""
+    n = n or len(items)
+    st.markdown(f'<div class="grid g{n}">' + "".join(items) + "</div>", unsafe_allow_html=True)
 
 
 def feature(icon, title, text):
@@ -136,8 +178,10 @@ def pool():
     return load_pool()
 
 
-def scenario_with(name, desc, price, volume):
+def scenario_with(name, desc, price, volume, competitors=None):
     sc = copy.deepcopy(BASE)
+    if competitors:  # 화면에서 편집한 경쟁 진열대
+        sc["products"] = [p for p in sc["products"] if p["id"] == CONCEPT_ID] + competitors
     for p in sc["products"]:
         if p["id"] == CONCEPT_ID:
             p.update({"name": name, "description": desc, "price": int(price), "volume_ml": int(volume)})
@@ -165,14 +209,21 @@ def latest(pattern):
 
 
 def can_run(mock: bool) -> bool:
-    """실제 실행(비용 발생) 권한: 로컬이거나, 배포에서 비밀번호를 맞힌 경우."""
-    if mock or not APP_PASSWORD:
+    """실제 실행(비용 발생) 권한: 로컬이거나, 자기 API 키를 넣었거나, 배포에서 비밀번호를 맞힌 경우."""
+    if mock or not APP_PASSWORD or st.session_state.get("user_key"):
         return True
     return st.session_state.get("pw_ok", False)
 
 
 # ------------------------------------------------------------------ 사이드바
 with st.sidebar:
+    t1, t2 = st.columns(2)
+    if t1.button("🌙 다크", width="stretch", type="primary" if DARK else "secondary"):
+        st.session_state["theme"] = "dark"
+        st.rerun()
+    if t2.button("☀️ 라이트", width="stretch", type="secondary" if DARK else "primary"):
+        st.session_state["theme"] = "light"
+        st.rerun()
     st.markdown('<div class="eyebrow">Concept Card</div>', unsafe_allow_html=True)
     st.markdown("### 신제품 컨셉")
     c = next(p for p in BASE["products"] if p["id"] == CONCEPT_ID)
@@ -184,7 +235,8 @@ with st.sidebar:
         if st.button("컨셉 카드로 정리", disabled=not memo):
             try:
                 from vm.concept import parse_concept
-                card_ = parse_concept(LLM(mock=st.session_state.get("mock_flag", False)), memo,
+                card_ = parse_concept(LLM(mock=st.session_state.get("mock_flag", False),
+                                          api_key=st.session_state.get("user_key") or None), memo,
                                       st.session_state["c_price"], st.session_state["c_vol"])
                 st.session_state.update({"c_name": card_["name"], "c_desc": card_["description"],
                                          "c_price": int(card_["price"]), "c_vol": int(card_["volume_ml"]),
@@ -204,25 +256,49 @@ with st.sidebar:
     sex = st.radio("성별", ["전체", "남자", "여자"], horizontal=True)
     region = st.radio("지역", ["전체", "수도권", "비수도권"], horizontal=True)
     single = st.checkbox("1인 가구만")
-    st.caption("경쟁 진열대: " + " · ".join(f"{p['name']} {p['price']:,}원"
-                                          for p in BASE["products"] if p["id"] != CONCEPT_ID))
+    st.markdown("### 경쟁 진열대")
+    with st.expander("🛒 제품 추가·수정", expanded=False):
+        st.caption("맨 아래 빈 행에 입력하면 제품이 추가되고, 행을 선택해 삭제할 수 있어요. 실제 브랜드명을 쓰면 AI가 알고 있는 "
+                   "브랜드 인지도가 반영됩니다. 브랜드 영향 없이 비교하려면 'A사 제로 콜라'처럼 쓰세요.")
+        comp_df = st.data_editor(
+            pd.DataFrame([{"제품명": p["name"], "용량(ml)": p["volume_ml"], "가격(원)": p["price"], "설명": p["description"]}
+                          for p in BASE["products"] if p["id"] != CONCEPT_ID]),
+            num_rows="dynamic", hide_index=True, key="comp_editor", width="stretch",
+            column_config={"용량(ml)": st.column_config.NumberColumn(min_value=50, max_value=3000, step=50),
+                           "가격(원)": st.column_config.NumberColumn(min_value=100, max_value=20000, step=100)})
+    competitors = []
+    for i, r in comp_df.iterrows():
+        nm = str(r.get("제품명") or "").strip()
+        if nm and nm.lower() != "nan" and pd.notna(r.get("가격(원)")):
+            competitors.append({"id": f"C{len(competitors) + 1}", "name": nm,
+                                "volume_ml": int(r["용량(ml)"]) if pd.notna(r.get("용량(ml)")) else 500,
+                                "price": int(r["가격(원)"]),
+                                "description": "" if pd.isna(r.get("설명")) else str(r["설명"])})
+    competitors = competitors[:8]
+    st.caption(f"진열대: 신제품 + 경쟁 {len(competitors)}개" + (" (최대 8개)" if len(competitors) == 8 else ""))
     st.divider()
     mock = st.toggle("API 없이 시험(mock)", value=False, help="가짜 응답으로 화면과 흐름만 확인합니다. 수치는 의미 없음.")
     st.session_state["mock_flag"] = mock
-    if APP_PASSWORD and not mock:
+    st.text_input("OpenAI API 키 (선택)", type="password", placeholder="sk-...", key="user_key",
+                  help="다른 사람이 자기 키로 실행할 때 입력합니다. 이번 접속 동안 이 화면에서만 쓰고 저장하지 않으며, "
+                       "비용은 키 주인 계정에 청구됩니다. 비워 두면 서버에 설정된 키(.env 또는 Secrets)를 씁니다.")
+    USER_KEY = st.session_state.get("user_key") or None
+    if APP_PASSWORD and not mock and not USER_KEY:
         pw = st.text_input("실행 비밀번호", type="password", help="공개 데모에서는 저장된 결과만 볼 수 있습니다.")
         st.session_state["pw_ok"] = (pw == APP_PASSWORD)
-    scenario = scenario_with(name, desc, price, volume)
+    scenario = scenario_with(name, desc, price, volume, competitors)
     seg = {"sex": None if sex == "전체" else sex, "region": None if region == "전체" else region, "single_only": single}
 
 # ------------------------------------------------------------------ 히어로
 st.markdown(f"""
 <div class="hero">
   <div class="eyebrow">LOTTE AX Challenge 2026 · 과제 1 · AI 페르소나 기반 신제품 시장 검증</div>
-  <h1>칠성 버추얼 마켓</h1>
-  <p>실제 인구 분포를 따르는 AI 소비자 패널이 신제품 컨셉에 반응하고, 그 결과를 <b>어디까지 믿을 수 있는지</b> 실제 정부 설문으로 검증해 함께 보여줍니다.</p>
-  <span class="chip">합성 페르소나 100만 명 풀</span><span class="chip">실제 설문 1.7만 명으로 검증</span>
-  <span class="chip">AI 에이전트 자동 실험·리포트</span><span class="chip">실제 조사 앞단 필터</span>
+  <h1>{APP_NAME}</h1>
+  <p>{APP_TAGLINE}</p>
+  <div class="sources">
+    페르소나 · <a href="https://huggingface.co/datasets/nvidia/Nemotron-Personas-Korea" target="_blank">NVIDIA Nemotron-Personas-Korea</a> (국가통계 분포 기반 합성 100만 명, CC BY 4.0)<br>
+    검증 데이터 · <a href="https://krei.re.kr/foodSurvey/page/460" target="_blank">한국농촌경제연구원 식품소비행태조사</a> 2023~2025 성인 원자료
+  </div>
 </div>""", unsafe_allow_html=True)
 
 tabs = st.tabs(["① 컨셉 검증 · AI 에이전트", "② 진열대 시뮬레이션", "③ 가상 FGI", "④ 신뢰도 검증",
@@ -256,7 +332,7 @@ with tabs[0]:
                     st.markdown(f'<div class="step"><b>[{step}] {label}</b><br><span>{json.dumps(args, ensure_ascii=False) if args else ""} {detail}</span></div>',
                                 unsafe_allow_html=True)
             try:
-                res = run_agent(question, scenario, budget=int(budget), mock=mock, on_step=on_step)
+                res = run_agent(question, scenario, budget=int(budget), mock=mock, on_step=on_step, api_key=USER_KEY)
                 status.update(label=f"완료 · 새 페르소나 응답 {res['api_calls']}개 (예산 {res['budget']})", state="complete")
                 st.session_state["agent_result"] = res
             except Exception as e:
@@ -295,7 +371,7 @@ with tabs[1]:
     if st.button("시뮬레이션 실행", type="primary", disabled=not can_run(mock)):
         try:
             panel = sample_panel(pool(), n, 42, age[0], age[1], **seg)
-            llm = LLM(mock=mock)
+            llm = LLM(mock=mock, api_key=USER_KEY)
             with st.spinner(f"{n}명에게 묻는 중…"):
                 df = run(scenario, panel, llm, 42, mode="prob")
             st.session_state["sim"] = (df, scenario, llm.api_calls)
@@ -311,10 +387,9 @@ with tabs[1]:
         share = shares_of(ok, sc).rename(index=names).mul(100).round(1)
         wtp = int(ok[f"max_price_{CONCEPT_ID}"].median())
         cprice = next(p["price"] for p in sc["products"] if p["id"] == CONCEPT_ID)
-        k1, k2, k3 = st.columns(3)
-        k1.markdown(card("신제품 구매 비율", f"{share[cname]:.1f}%", f"1위 {share.idxmax()} {share.max():.1f}%"), unsafe_allow_html=True)
-        k2.markdown(card("앞으로 사 볼 의향", f"{ok[f'try_{CONCEPT_ID}'].mean() * 100:.1f}%", "제품을 한 번이라도 사 볼 사람 비율"), unsafe_allow_html=True)
-        k3.markdown(card("지불의사가격(중앙값)", f"{wtp:,}원", f"판매가 {cprice:,}원 대비 {wtp - cprice:+,}원"), unsafe_allow_html=True)
+        grid([card("신제품 구매 비율", f"{share[cname]:.1f}%", f"1위 {share.idxmax()} {share.max():.1f}%"),
+              card("앞으로 사 볼 의향", f"{ok[f'try_{CONCEPT_ID}'].mean() * 100:.1f}%", "제품을 한 번이라도 사 볼 사람 비율"),
+              card("지불의사가격(중앙값)", f"{wtp:,}원", f"판매가 {cprice:,}원 대비 {wtp - cprice:+,}원")])
         st.write("")
         bars = share.reset_index().rename(columns={"index": "제품", 0: "비율"})
         bars.columns = ["제품", "비율"]
@@ -343,21 +418,19 @@ with tabs[1]:
             from vm.concept import suggest_improvements
             concept = next(p for p in sc["products"] if p["id"] == CONCEPT_ID)
             with st.spinner("개선안 만드는 중…"):
-                st.session_state["improve"] = {"variants": suggest_improvements(LLM(mock=mock), concept,
+                st.session_state["improve"] = {"variants": suggest_improvements(LLM(mock=mock, api_key=USER_KEY), concept,
                                                                                ok["reason"].astype(str).tolist(), 3)}
         imp = st.session_state.get("improve")
         if imp:
-            vc = st.columns(len(imp["variants"]))
-            for col, v in zip(vc, imp["variants"]):
-                col.markdown(feature("💡", f"{v['label']} · {v['name']}",
-                                     f"{v['description']}<br><b>{v['price']:,}원</b><br><span class='muted'>근거: {v['rationale']}</span>"),
-                             unsafe_allow_html=True)
+            grid([feature("💡", f"{v['label']} · {v['name']}",
+                          f"{v['description']}<br><b>{v['price']:,}원</b><br><span class='muted'>근거: {v['rationale']}</span>")
+                  for v in imp["variants"]])
             if i2.button("② 같은 패널로 재검증", type="primary", disabled=not can_run(mock)):
-                rows, llm2 = [], LLM(mock=mock)
+                rows, llm2 = [], LLM(mock=mock, api_key=USER_KEY)
                 cands = [{"label": "원안", "name": name, "description": desc, "price": price}] + imp["variants"]
                 with st.spinner(f"{len(cands)}개 안 × {len(st.session_state['sim_panel'])}명 검증 중…"):
                     for v in cands:
-                        sc2 = scenario_with(v["name"], v["description"], v["price"], volume)
+                        sc2 = scenario_with(v["name"], v["description"], v["price"], volume, competitors)
                         d2 = run(sc2, st.session_state["sim_panel"], llm2, 42, mode="prob")
                         o2 = d2[d2["error"] == ""]
                         rows.append({"안": f"{v['label']} · {v['name']}", "구매 비율(%)": round(o2[f"p_{CONCEPT_ID}"].mean() * 100, 1),
@@ -386,7 +459,7 @@ with tabs[2]:
         try:
             fp = sample_panel(pool(), 60, 42, age[0], age[1], **seg)
             with st.spinner(f"{k}명 × 3라운드 진행 중… (약 {k * 3 + 1}회 호출)"):
-                fres = run_fgi(LLM(mock=mock), scenario, fp, k)
+                fres = run_fgi(LLM(mock=mock, api_key=USER_KEY), scenario, fp, k)
             out = OUT_DIR / f"fgi_{pd.Timestamp.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
             out.mkdir(parents=True, exist_ok=True)
             (out / "fgi.json").write_text(json.dumps({"concept": name, "price": price, **fres}, ensure_ascii=False, indent=1),
@@ -408,11 +481,8 @@ with tabs[2]:
     if fres:
         BADGE = {"살 것": "b-buy", "고민": "b-mid", "안 살 것": "b-no"}
         fs = fres["final_stance"]
-        k1, k2, k3 = st.columns(3)
-        k1.markdown(card("최종: 살 것", f"{fs.get('살 것', 0)}명"), unsafe_allow_html=True)
-        k2.markdown(card("최종: 고민", f"{fs.get('고민', 0)}명"), unsafe_allow_html=True)
-        k3.markdown(card("최종: 안 살 것", f"{fs.get('안 살 것', 0)}명",
-                         f"입장 바뀐 사람 {len(fres['stance_changed'])}명"), unsafe_allow_html=True)
+        grid([card("최종: 살 것", f"{fs.get('살 것', 0)}명"), card("최종: 고민", f"{fs.get('고민', 0)}명"),
+              card("최종: 안 살 것", f"{fs.get('안 살 것', 0)}명", f"입장 바뀐 사람 {len(fres['stance_changed'])}명")])
         st.write("")
         left, right = st.columns([3, 2])
         with left:
@@ -447,15 +517,12 @@ with tabs[3]:
     else:
         t = pd.read_csv(f, index_col=0)
         if "prob" in t.index and "base" in t.index:
-            k1, k2, k3, k4 = st.columns(4)
-            k1.markdown(card("탄산·이온 선호 오차", f"{t.loc['prob', 'four_rate_mae']:.1f}%p",
-                             f"기본 방식 {t.loc['base', 'four_rate_mae']:.1f}%p"), unsafe_allow_html=True)
-            k2.markdown(card("연령 방향 일치도", f"{t.loc['prob', 'four_age_corr']:.2f}",
-                             f"기본 방식 {t.loc['base', 'four_age_corr']:.2f}"), unsafe_allow_html=True)
-            k3.markdown(card("1순위 음료 분포 오차", f"{t.loc['prob', 'fav_mae']:.1f}%p",
-                             f"무작위 {t.loc['무작위 기준선', 'fav_mae']:.1f} · 실제끼리 1.2~1.8"), unsafe_allow_html=True)
-            k4.markdown(card("검증 문항 오차", f"{t.loc['prob', 'zero_mae(검증)']:.1f}%p",
-                             f"설정 선택에 미사용 · 기본 {t.loc['base', 'zero_mae(검증)']:.1f}"), unsafe_allow_html=True)
+            grid([card("탄산·이온 선호 오차", f"{t.loc['prob', 'four_rate_mae']:.1f}%p", f"기본 방식 {t.loc['base', 'four_rate_mae']:.1f}%p"),
+                  card("연령 방향 일치도", f"{t.loc['prob', 'four_age_corr']:.2f}", f"기본 방식 {t.loc['base', 'four_age_corr']:.2f}"),
+                  card("1순위 음료 분포 오차", f"{t.loc['prob', 'fav_mae']:.1f}%p",
+                       f"무작위 {t.loc['무작위 기준선', 'fav_mae']:.1f} · 실제끼리 1.2~1.8"),
+                  card("검증 문항 오차", f"{t.loc['prob', 'zero_mae(검증)']:.1f}%p",
+                       f"설정 선택에 미사용 · 기본 {t.loc['base', 'zero_mae(검증)']:.1f}")])
         ages = ["20대 이하", "30대", "40대", "50대", "60대 이상"]
         rows = [(r, lbl) for r, lbl in [("실제(KREI)", "실제 설문"), ("prob", "100명 분포 응답(채택)"), ("base", "기본 방식")] if r in t.index]
         long = pd.DataFrame([{"연령": a, "구분": lbl, "비율": t.loc[r, f"four_{a}"]} for r, lbl in rows for a in ages])
@@ -468,13 +535,12 @@ with tabs[3]:
             tooltip=["연령", "구분", "비율"]).properties(height=320)
         st.write("")
         st.altair_chart(style_chart(line), width="stretch")
-        c1, c2 = st.columns(2)
-        c1.markdown(feature("🎯", "무엇을 발견했나",
-                            "한 사람에게 답 하나를 받으면 '가장 그럴듯한 답'으로 쏠려 커피·녹차가 과다하고 우유류는 0명이었습니다. "
-                            "실제 설문과의 오차가 무작위로 찍은 것보다 컸습니다."), unsafe_allow_html=True)
-        c2.markdown(feature("🛠", "어떻게 고쳤나",
-                            "'비슷한 사람 100명이 어떻게 나뉠지'를 묻는 방식으로 바꾸자 탄산·이온 음료 선호가 연령별로 실제와 1~4%p 안에 들어왔고, "
-                            "설정 선택에 쓰지 않은 검증 문항에서도 개선됐습니다."), unsafe_allow_html=True)
+        grid([feature("🎯", "무엇을 발견했나",
+                      "한 사람에게 답 하나를 받으면 '가장 그럴듯한 답'으로 쏠려 커피·녹차가 과다하고 우유류는 0명이었습니다. "
+                      "실제 설문과의 오차가 무작위로 찍은 것보다 컸습니다."),
+              feature("🛠", "어떻게 고쳤나",
+                      "'비슷한 사람 100명이 어떻게 나뉠지'를 묻는 방식으로 바꾸자 탄산·이온 음료 선호가 연령별로 실제와 1~4%p 안에 들어왔고, "
+                      "설정 선택에 쓰지 않은 검증 문항에서도 개선됐습니다.")])
         with st.expander("전체 비교표"):
             st.dataframe(t)
         st.caption(f"결과 파일: {f}")
@@ -509,33 +575,26 @@ digraph G {{
              ("4", "📊", "리포트·개선 루프", "수치·신뢰도 확인 후 개선안을 같은 패널로 재검증"),
              ("5", "✅", "상위안만 실제 조사", "걸러진 1~2안만 FGI·설문으로"),
              ("6", "🔁", "결과로 보정", "실제 조사 결과를 다시 검증 데이터로")]
-    for row in (steps[:3], steps[3:]):
-        cols = st.columns(3)
-        for col, (no, icon, title, text) in zip(cols, row):
-            col.markdown(feature(icon, f"{no}. {title}", text), unsafe_allow_html=True)
-        st.write("")
+    grid([feature(icon, f"{no}. {title}", text) for no, icon, title, text in steps], 3)
     st.write("")
     st.markdown('<div class="section-title">롯데칠성음료에서 쓰일 곳</div>', unsafe_allow_html=True)
-    u = st.columns(3)
-    u[0].markdown(feature("🧪", "컨셉 스크리닝", "수십 개 컨셉 후보를 하루 안에 걸러 FGI·설문 대상 수를 줄임"), unsafe_allow_html=True)
-    u[1].markdown(feature("💰", "가격대 탐색", "같은 패널로 가격만 바꿔 구매 비율·지불의사가격 변화를 비교"), unsafe_allow_html=True)
-    u[2].markdown(feature("✍️", "네이밍·카피 A/B", "이름·문구만 바꾼 안을 같은 패널에 비교해 방향을 좁힘"), unsafe_allow_html=True)
-    u = st.columns(3)
-    u[0].markdown(feature("🎯", "타깃 탐색", "연령·성별·지역·1인 가구별로 어디서 반응이 좋은지 확인"), unsafe_allow_html=True)
-    u[1].markdown(feature("🔄", "자사 제품 잠식 확인", "진열대에 자사 기존 제품을 함께 두고 신제품이 어디서 점유를 가져오는지 확인"), unsafe_allow_html=True)
-    u[2].markdown(feature("🧓", "모으기 어려운 집단", "FGI로 모으기 어려운 고령층·지방 거주자 반응을 미리 점검"), unsafe_allow_html=True)
+    grid([feature("🧪", "컨셉 스크리닝", "수십 개 컨셉 후보를 하루 안에 걸러 FGI·설문 대상 수를 줄임"),
+          feature("💰", "가격대 탐색", "같은 패널로 가격만 바꿔 구매 비율·지불의사가격 변화를 비교"),
+          feature("✍️", "네이밍·카피 A/B", "이름·문구만 바꾼 안을 같은 패널에 비교해 방향을 좁힘"),
+          feature("🎯", "타깃 탐색", "연령·성별·지역·1인 가구별로 어디서 반응이 좋은지 확인"),
+          feature("🔄", "자사 제품 잠식 확인", "진열대에 자사 기존 제품을 함께 두고 신제품이 어디서 점유를 가져오는지 확인"),
+          feature("🧓", "모으기 어려운 집단", "FGI로 모으기 어려운 고령층·지방 거주자 반응을 미리 점검")], 3)
 
 # ------------------------------------------------------------------ ⑥ 한계
 with tabs[5]:
     st.markdown('<div class="section-title">한계와 로드맵</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    c1.markdown(feature("✅", "지금 알 수 있는 것",
-                        "연령대별 음료 선호의 방향과 대략적인 크기(탄산·이온 선호는 실제 설문과 연령별 1~4%p), "
-                        "같은 패널에서 가격·문구를 바꿨을 때의 상대적 반응 차이"), unsafe_allow_html=True)
-    c2.markdown(feature("⚠️", "조심해야 할 것",
-                        "전체 음료 분포 오차(약 3.4%p)는 실제 설문끼리 차이(1.2~1.8%p)의 약 2배입니다. "
-                        "3%p 미만 차이는 단정하지 않습니다. 검증 기준은 '좋아하는 음료' 설문이라 실제 구매와 다를 수 있고, "
-                        "합성 페르소나에는 음료 습관·소득·브랜드 충성도 정보가 없습니다."), unsafe_allow_html=True)
+    grid([feature("✅", "지금 알 수 있는 것",
+                  "연령대별 음료 선호의 방향과 대략적인 크기(탄산·이온 선호는 실제 설문과 연령별 1~4%p), "
+                  "같은 패널에서 가격·문구를 바꿨을 때의 상대적 반응 차이"),
+          feature("⚠️", "조심해야 할 것",
+                  "전체 음료 분포 오차(약 3.4%p)는 실제 설문끼리 차이(1.2~1.8%p)의 약 2배입니다. "
+                  "3%p 미만 차이는 단정하지 않습니다. 검증 기준은 '좋아하는 음료' 설문이라 실제 구매와 다를 수 있고, "
+                  "합성 페르소나에는 음료 습관·소득·브랜드 충성도 정보가 없습니다.")])
     st.write("")
     st.markdown("**발견한 LLM 편향과 대응** — 같은 성향을 세 번 확인했습니다")
     st.dataframe(pd.DataFrame([
@@ -544,8 +603,7 @@ with tabs[5]:
         ["캡스톤 연구", "상권 방문 토요일 74%(실제 11.7%)", "시간·요일은 실데이터로 고정"],
     ], columns=["실험", "나타난 편향", "대응"]), hide_index=True, width="stretch")
     st.markdown("**로드맵**")
-    r = st.columns(4)
-    r[0].markdown(feature("1", "롯데칠성 데이터 연결", "판매·조사 데이터로 패널 비율 조정과 결과 보정"), unsafe_allow_html=True)
-    r[1].markdown(feature("2", "사후 검증", "과거 출시 제품을 시뮬레이션해 실제 성과 순위와 비교"), unsafe_allow_html=True)
-    r[2].markdown(feature("3", "보안", "사내 데이터는 사내 배포형 모델로 교체(구조상 교체 가능)"), unsafe_allow_html=True)
-    r[3].markdown(feature("4", "확산", "같은 구조로 다른 식품·유통 계열사 신제품 검증"), unsafe_allow_html=True)
+    grid([feature("1", "롯데칠성 데이터 연결", "판매·조사 데이터로 패널 비율 조정과 결과 보정"),
+          feature("2", "사후 검증", "과거 출시 제품을 시뮬레이션해 실제 성과 순위와 비교"),
+          feature("3", "보안", "사내 데이터는 사내 배포형 모델로 교체(구조상 교체 가능)"),
+          feature("4", "확산", "같은 구조로 다른 식품·유통 계열사 신제품 검증")])
