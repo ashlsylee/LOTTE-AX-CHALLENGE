@@ -1,0 +1,14 @@
+{
+  "n_per_age": 30,
+  "seed": 42,
+  "model": "gpt-5.4-mini",
+  "conditions": [
+    "base",
+    "prob"
+  ],
+  "reference_year_to_year_fav_mae": {
+    "2023_vs_2024": 1.41,
+    "2023_vs_2025": 1.77,
+    "2024_vs_2025": 1.15
+  }
+}
