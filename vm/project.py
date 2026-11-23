@@ -11,9 +11,10 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .config import OUT_DIR
+from .config import DEMO_DIR, OUT_DIR
 
 PROJ_DIR = OUT_DIR / "projects"
+DEMO_PROJ_DIR = DEMO_DIR / "projects"  # 시연용(읽기 전용). 수정하면 outputs/projects 에 저장됨
 STAGES = ["컨셉 입력", "타깃 설정", "AI 검증", "리포트·개선", "실제 조사 선정", "결과 보정"]
 DECISIONS = ["진행", "보류", "중단"]
 
@@ -29,7 +30,8 @@ def _slug(name: str) -> str:
 
 def list_projects() -> list[dict]:
     out = []
-    for f in sorted(PROJ_DIR.glob("*/project.json"), reverse=True):
+    files = {f.parent.name: f for d in (DEMO_PROJ_DIR, PROJ_DIR) for f in d.glob("*/project.json")}
+    for _, f in sorted(files.items(), reverse=True):
         try:
             p = json.loads(f.read_text(encoding="utf-8"))
             out.append({"id": p["id"], "name": p["name"], "updated": p.get("updated", "")})
@@ -39,7 +41,10 @@ def list_projects() -> list[dict]:
 
 
 def load(pid: str) -> dict:
-    return json.loads((PROJ_DIR / pid / "project.json").read_text(encoding="utf-8"))
+    f = PROJ_DIR / pid / "project.json"
+    if not f.exists():
+        f = DEMO_PROJ_DIR / pid / "project.json"
+    return json.loads(f.read_text(encoding="utf-8"))
 
 
 def save(p: dict) -> dict:

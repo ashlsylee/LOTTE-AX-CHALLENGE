@@ -15,7 +15,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from vm.config import OUT_DIR, PERSONA_PATH
+from vm.config import OUT_DIR, PERSONA_PATH, result_files
 
 # ---- 서비스 이름: 여기 두 줄만 바꾸면 화면 전체(탭 제목, 상단 제목)에 반영된다
 APP_NAME = "프리셸프 PreShelf"
@@ -238,7 +238,7 @@ def run_label(path: str) -> str:
 
 
 def latest(pattern):
-    files = sorted(f for f in glob.glob(str(OUT_DIR / pattern)) if "_mock" not in f)
+    files = [f for f in result_files(pattern) if "_mock" not in f]
     return files[-1] if files else None
 
 
@@ -558,7 +558,7 @@ with tabs[1]:
         st.caption("🔒 실행하려면 왼쪽에 비밀번호 또는 본인 API 키를 넣으세요. 아래 '저장된 결과 보기'는 그대로 볼 수 있어요.")
 
     with st.expander("저장된 결과 보기 (API 없이 시연할 때)"):
-        runs = sorted(glob.glob(str(OUT_DIR / "agent_*")), reverse=True)
+        runs = result_files("agent_*")[::-1]
         pick = st.selectbox("이전 실행", runs, format_func=run_label) if runs else None
         if pick and st.button("불러오기"):
             st.session_state["agent_result"] = {
@@ -695,7 +695,7 @@ with tabs[3]:
                          "입장 바뀐 사람": len(fres["stance_changed"])}, str(out))
         except Exception as e:
             st.error(f"{type(e).__name__}: {e}")
-    saved = sorted(glob.glob(str(OUT_DIR / "fgi_*" / "fgi.json")), reverse=True)
+    saved = result_files("fgi_*/fgi.json")[::-1]
     if saved:
         with st.expander("저장된 좌담회 보기"):
             def _fl(f):
@@ -837,7 +837,7 @@ with tabs[4]:
                       "설정 선택에 쓰지 않은 검증 문항에서도 개선됐습니다.")])
         with st.expander("전체 비교표"):
             st.dataframe(t)
-        conn = sorted(glob.glob(str(OUT_DIR / "connect_*" / "result.json")), reverse=True)
+        conn = result_files("connect_*/result.json")[::-1]
         if conn:
             with st.expander(f"받은 데이터로 한 추가 검증 ({len(conn)}건) — ⑤ 데이터 연결"):
                 st.dataframe(pd.DataFrame([{k: d.get(k) for k in ["question", "mae", "random_mae", "n_ok", "source", "mock"]}

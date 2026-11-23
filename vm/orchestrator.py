@@ -32,7 +32,7 @@ from datetime import datetime
 import pandas as pd
 from dotenv import load_dotenv
 
-from .config import OUT_DIR
+from .config import OUT_DIR, result_files
 from .llm import LLM
 from .personas import load_pool, sample_panel
 from .concept import suggest_improvements
@@ -204,14 +204,14 @@ class Toolbox:
 
     # ---------- 도구 ----------
     def check_reliability(self):
-        files = sorted(glob.glob(str(OUT_DIR / "survey_*" / "comparison.csv")))
+        files = result_files("survey_*/comparison.csv")
         files = [f for f in files if "_mock" not in f]
         if not files:
             return {"status": "검증 결과 없음", "note": "python -m vm.survey 를 먼저 실행해야 신뢰도를 말할 수 있다."}
         t = pd.read_csv(files[-1], index_col=0)
         keep = [r for r in ["prob", "base", "무작위 기준선", "실제(KREI)"] if r in t.index]
         extra = []  # ⑤ 데이터 연결에서 받은 데이터로 한 추가 검증
-        for f in sorted(glob.glob(str(OUT_DIR / "connect_*" / "result.json")))[-3:]:
+        for f in result_files("connect_*/result.json")[-3:]:
             r = json.loads(open(f, encoding="utf-8").read())
             if not r.get("mock"):
                 extra.append({k: r.get(k) for k in ["question", "mae", "random_mae", "n_ok", "source"]})
