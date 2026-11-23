@@ -153,10 +153,14 @@ class Toolbox:
         self.pool = load_pool()
         self.last_df, self.last_scenario = None, scenario
         self.runs = []
+        self.quota = None
 
     # ---------- 공통 ----------
     def _panel(self, n, age_min, age_max, sex=None, region=None, single_only=False):
         n = max(10, min(int(n or 50), MAX_PANEL))
+        if self.quota and not any([age_min, age_max, sex, region, single_only]):
+            from .connect import quota_panel  # 받은 데이터의 고객 구성대로 패널을 뽑는다
+            return quota_panel(self.pool, n, self.quota, self.seed)
         return sample_panel(self.pool, n, self.seed, age_min, age_max, sex=sex, region=region,
                             single_only=bool(single_only))
 
@@ -206,7 +210,13 @@ class Toolbox:
             return {"status": "검증 결과 없음", "note": "python -m vm.survey 를 먼저 실행해야 신뢰도를 말할 수 있다."}
         t = pd.read_csv(files[-1], index_col=0)
         keep = [r for r in ["prob", "base", "무작위 기준선", "실제(KREI)"] if r in t.index]
+        extra = []  # ⑤ 데이터 연결에서 받은 데이터로 한 추가 검증
+        for f in sorted(glob.glob(str(OUT_DIR / "connect_*" / "result.json")))[-3:]:
+            r = json.loads(open(f, encoding="utf-8").read())
+            if not r.get("mock"):
+                extra.append({k: r.get(k) for k in ["question", "mae", "random_mae", "n_ok", "source"]})
         return {
+            "추가 검증(받은 데이터)": extra or "없음",
             "source": "KREI 식품소비행태조사 2023~2025 성인(가중), 같은 질문을 페르소나에게 물어 비교",
             "채택 방식": "prob(100명 분포 응답)" if "prob" in t.index else "base",
             "table": t.loc[keep].round(2).where(t.loc[keep].notna(), None).to_dict(orient="index"),
@@ -297,11 +307,13 @@ def scripted_plan(request: str):
 
 
 def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 10, model: str | None = None,
-              agent_model: str | None = None, mock: bool = False, on_step=None, api_key: str | None = None) -> dict:
+              agent_model: str | None = None, mock: bool = False, on_step=None, api_key: str | None = None,
+              quota: dict | None = None) -> dict:
     """에이전트 1회 실행. CLI와 화면(app.py)이 같이 쓴다. on_step(step, tool, args, result)로 진행을 알린다."""
     load_dotenv()
     llm = LLM(model, mock=mock, api_key=api_key)
     tb = Toolbox(scenario, llm, budget)
+    tb.quota = quota
     out_dir = OUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
     out_dir.mkdir(parents=True)
     trace, report = [], None

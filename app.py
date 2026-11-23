@@ -111,7 +111,7 @@ p, li {{ line-height: 1.7; }}
 .card .sub {{ color: {T["chip_text"]}; font-size: 0.8rem; margin-top: 0.15rem; }}
 .card h4 {{ margin: 0.2rem 0 0.4rem 0; color: {T["text"]}; }}
 .card p {{ color: {T["sub"]}; font-size: 0.9rem; margin: 0; }}
-.icon {{ width: 42px; height: 42px; border-radius: 50%; display:flex; align-items:center; justify-content:center;
+.fi-icon {{ width: 42px; height: 42px; border-radius: 50%; display:flex; align-items:center; justify-content:center;
          background: radial-gradient(circle, rgba(228,0,43,0.45), rgba(228,0,43,0.08)); font-size: 1.2rem; margin-bottom: .6rem; }}
 .step {{ border-left: 2px solid {RED}; padding: 0.35rem 0 0.35rem 0.9rem; margin: 0.2rem 0 0.2rem 0.3rem; }}
 .step b {{ color: {T["text"]}; }} .step span {{ color: {MUTED}; font-size: 0.85rem; }}
@@ -187,7 +187,7 @@ def grid(items, n=None):
 
 
 def feature(icon, title, text):
-    return f'<div class="card"><div class="icon">{icon}</div><h4>{title}</h4><p>{text}</p></div>'
+    return f'<div class="card"><div class="fi-icon">{icon}</div><h4>{title}</h4><p>{text}</p></div>'
 
 
 # ------------------------------------------------------------------ 데이터
@@ -306,6 +306,11 @@ with st.sidebar:
                                 "description": "" if pd.isna(r.get("설명")) else str(r["설명"])})
     competitors = competitors[:8]
     st.caption(f"진열대: 신제품 + 경쟁 {len(competitors)}개" + (" (최대 8개)" if len(competitors) == 8 else ""))
+    if st.session_state.get("quota"):
+        st.info("👥 패널 구성: ⑤ 데이터 연결에서 적용한 실제 고객 구성대로 뽑는 중(위 연령·성별 선택보다 우선)", icon=None)
+        if st.button("데이터 구성 해제"):
+            st.session_state.pop("quota")
+            st.rerun()
     st.divider()
     mock = st.toggle("API 없이 시험(mock)", value=False, help="가짜 응답으로 화면과 흐름만 확인합니다. 수치는 의미 없음.")
     st.session_state["mock_flag"] = mock
@@ -325,6 +330,14 @@ with st.sidebar:
             "shelf": [(p["name"], p["price"]) for p in competitors]}
     seg = {"sex": None if sex == "전체" else sex, "region": None if region == "전체" else region, "single_only": single}
 
+def make_panel(n: int):
+    """패널 추출: ⑤ 데이터 연결에서 고객 구성을 적용했으면 그 비율대로, 아니면 왼쪽 타깃 조건대로."""
+    if st.session_state.get("quota"):
+        from vm.connect import quota_panel
+        return quota_panel(pool(), n, st.session_state["quota"])
+    return sample_panel(pool(), n, 42, age[0], age[1], **seg)
+
+
 # ------------------------------------------------------------------ 히어로
 st.markdown(f"""
 <div class="hero">
@@ -338,7 +351,7 @@ st.markdown(f"""
 </div>""", unsafe_allow_html=True)
 
 tabs = st.tabs(["① 컨셉 검증 · AI 에이전트", "② 진열대 시뮬레이션", "③ 가상 FGI", "④ 신뢰도 검증",
-                "⑤ 서비스 구조·운영", "⑥ 한계와 로드맵"])
+                "⑤ 데이터 연결", "⑥ 서비스 구조·운영", "⑦ 한계와 로드맵"])
 
 # ------------------------------------------------------------------ ① 에이전트
 with tabs[0]:
@@ -386,7 +399,8 @@ with tabs[0]:
                     st.markdown(f'<div class="step"><b>[{step}] {label}</b><br><span>{json.dumps(args, ensure_ascii=False) if args else ""} {detail}</span></div>',
                                 unsafe_allow_html=True)
             try:
-                res = run_agent(question, scenario, budget=int(budget), mock=mock, on_step=on_step, api_key=USER_KEY)
+                res = run_agent(question, scenario, budget=int(budget), mock=mock, on_step=on_step, api_key=USER_KEY,
+                                quota=st.session_state.get("quota"))
                 status.update(label=f"완료 · 새 페르소나 응답 {res['api_calls']}개 (예산 {res['budget']})", state="complete")
                 st.session_state["agent_result"] = {**res, "cond": dict(COND)}
             except Exception as e:
@@ -425,7 +439,7 @@ with tabs[1]:
     n = st.slider("패널 인원", 10, 100, 50, step=10)
     if st.button("시뮬레이션 실행", type="primary", disabled=not can_run(mock)):
         try:
-            panel = sample_panel(pool(), n, 42, age[0], age[1], **seg)
+            panel = make_panel(n)
             llm = LLM(mock=mock, api_key=USER_KEY)
             with st.spinner(f"{n}명에게 묻는 중…"):
                 df = run(scenario, panel, llm, 42, mode="prob")
@@ -514,7 +528,7 @@ with tabs[2]:
     if st.button("좌담회 시작", type="primary", disabled=not can_run(mock)):
         from vm.fgi import run_fgi
         try:
-            fp = sample_panel(pool(), 60, 42, age[0], age[1], **seg)
+            fp = make_panel(60)
             with st.spinner(f"{k}명 × 3라운드 진행 중… (약 {k * 3 + 1}회 호출)"):
                 fres = run_fgi(LLM(mock=mock, api_key=USER_KEY), scenario, fp, k)
             out = OUT_DIR / f"fgi_{pd.Timestamp.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
@@ -601,10 +615,102 @@ with tabs[3]:
                       "설정 선택에 쓰지 않은 검증 문항에서도 개선됐습니다.")])
         with st.expander("전체 비교표"):
             st.dataframe(t)
+        conn = sorted(glob.glob(str(OUT_DIR / "connect_*" / "result.json")), reverse=True)
+        if conn:
+            with st.expander(f"받은 데이터로 한 추가 검증 ({len(conn)}건) — ⑤ 데이터 연결"):
+                st.dataframe(pd.DataFrame([{k: d.get(k) for k in ["question", "mae", "random_mae", "n_ok", "source", "mock"]}
+                                           for d in (json.loads(Path(f).read_text(encoding="utf-8")) for f in conn)])
+                             .rename(columns={"question": "질문", "mae": "오차(%p)", "random_mae": "무작위(%p)", "n_ok": "응답",
+                                              "source": "데이터", "mock": "mock"}), hide_index=True, width="stretch")
         st.caption(f"결과 파일: {f}")
 
-# ------------------------------------------------------------------ ⑤ 서비스 구조
+# ------------------------------------------------------------------ ⑤ 데이터 연결
 with tabs[4]:
+    from vm.connect import (answer_options, ask_question, compare, composition, load_table, reference_dist,
+                            save_result, to_age_bucket)
+    st.markdown('<div class="section-title">데이터 연결</div>', unsafe_allow_html=True)
+    st.markdown('<p class="muted">받은 표(CSV·엑셀)에서 열만 고르면 바로 씁니다. ① 같은 설문 문항을 페르소나에게 물어 실제 응답과 비교(검증)하고, '
+                '② 실제 고객 구성대로 페르소나 패널을 뽑습니다. 개인 단위 데이터는 AI에 보내지 않고 집계 분포만 씁니다.</p>',
+                unsafe_allow_html=True)
+    up = st.file_uploader("파일 올리기", type=["csv", "xlsx", "xls"])
+    use_sample = st.checkbox("예시 파일로 해 보기 (KREI 공개 집계값으로 만든 가짜 응답자 1,200명)", value=up is None)
+    src = up if up is not None else (Path("data/sample/예시_소비자조사.csv") if use_sample else None)
+    if src is None:
+        st.info("파일을 올리거나 예시 파일을 선택하세요.")
+    else:
+        try:
+            df_in = load_table(src)
+        except Exception as e:
+            st.error(f"파일을 읽지 못했어요: {e}")
+            df_in = None
+        if df_in is not None:
+            st.caption(f"{len(df_in):,}행 · {len(df_in.columns)}열")
+            st.dataframe(df_in.head(5), hide_index=True, width="stretch")
+            cols = list(df_in.columns)
+            guess = lambda keys: next((c for c in cols if any(k in str(c) for k in keys)), None)
+            m1, m2, m3 = st.columns(3)
+            age_col = m1.selectbox("나이(연령대) 열 *", cols, index=cols.index(guess(["연령", "나이", "age"])) if guess(["연령", "나이", "age"]) else 0)
+            sex_col = m2.selectbox("성별 열", ["(없음)"] + cols, index=(cols.index(guess(["성별", "sex", "gender"])) + 1) if guess(["성별", "sex", "gender"]) else 0)
+            w_col = m3.selectbox("가중치 열", ["(없음)"] + cols, index=(cols.index(guess(["가중", "weight", "wt"])) + 1) if guess(["가중", "weight", "wt"]) else 0)
+            sex_col = None if sex_col == "(없음)" else sex_col
+            w_col = None if w_col == "(없음)" else w_col
+            bad_age = df_in[age_col].map(to_age_bucket).isna().mean()
+            if bad_age > 0.2:
+                st.warning(f"나이 열에서 연령대를 못 읽은 행이 {bad_age:.0%}예요. 나이 숫자나 '30대'·'만 30~39세' 같은 값이 있는 열을 고르세요.")
+
+            st.markdown("---")
+            st.markdown("**① 설문 문항 검증**: 같은 질문을 페르소나에게 묻고 실제 응답과 비교")
+            # 응답 열 후보: ID처럼 값이 거의 다 다른 열은 빼고, 보기 수가 2~30개인 열을 앞에 둔다
+            rest = [c for c in cols if c not in (age_col, sex_col, w_col)]
+            good = [c for c in rest if 2 <= df_in[c].nunique() <= 30]
+            ans_col = st.selectbox("응답 열", good + [c for c in rest if c not in good],
+                                   help="보기 수가 2~30개인 열이 앞에 나옵니다. ID처럼 값이 모두 다른 열은 비교할 수 없어요.")
+            if df_in[ans_col].nunique() > 30:
+                st.warning("이 열은 값 종류가 너무 많아요(ID나 주관식일 수 있어요). 보기가 정해진 객관식 응답 열을 고르세요.")
+            opts_all = answer_options(df_in, ans_col)
+            q = st.text_input("질문 문구(설문지 그대로 쓰면 가장 정확해요)", value=str(ans_col))
+            opts = st.multiselect(f"비교할 보기(많이 나온 순, 최대 {len(opts_all)}개)", opts_all, default=opts_all)
+            npa = st.slider("연령대별 인원", 5, 30, 10, help="5개 연령대 × 인원 = API 호출 수. 판단용은 30 권장(설문 재현 검증 기준).")
+            if st.button("검증 실행", type="primary", disabled=not can_run(mock) or len(opts) < 2):
+                ref = reference_dist(df_in, age_col, ans_col, opts, w_col)
+                from vm.survey import stratified_panel
+                pnl = stratified_panel(pool(), npa, 42)
+                with st.spinner(f"{len(pnl)}명에게 묻는 중…"):
+                    sim = ask_question(LLM(mock=mock, api_key=USER_KEY), pnl, q, opts)
+                r = compare(sim, ref, opts)
+                out = save_result(q, opts, r, {"source": getattr(src, "name", str(src)), "n_per_age": npa, "mock": mock})
+                st.session_state["connect_res"] = (q, opts, r, ref, str(out))
+            if "connect_res" in st.session_state:
+                q_, opts_, r, ref, out = st.session_state["connect_res"]
+                grid([card("페르소나 vs 실제 오차", f"{r['mae']:.1f}%p", "연령대별 분포 MAE"),
+                      card("무작위 기준선", f"{r['random_mae']:.1f}%p", "보기를 균등하게 찍었을 때"),
+                      card("판정", "무작위보다 나음" if r["mae"] < r["random_mae"] - 0.3 else "무작위 수준",
+                           f"응답 {r['n_ok']}명 · 연령대당 인원이 적으면 우연 오차가 큼")])
+                pick_age = st.radio("연령대", r["ages"], horizontal=True)
+                t_ = r["table"][r["table"]["연령대"] == pick_age].melt(id_vars=["연령대", "보기"], var_name="구분", value_name="비율")
+                ch = alt.Chart(t_).mark_bar(cornerRadiusEnd=4).encode(
+                    y=alt.Y("보기:N", sort="-x", title=None), x=alt.X("비율:Q", title="%"),
+                    color=alt.Color("구분:N", scale=alt.Scale(domain=["실제(%)", "페르소나(%)"], range=["#A1A1AA", RED]),
+                                    legend=alt.Legend(orient="top", title=None)),
+                    yOffset="구분:N", tooltip=["보기", "구분", "비율"]).properties(height=max(220, 34 * len(opts_)))
+                st.altair_chart(style_chart(ch), width="stretch")
+                st.caption(f"저장: {out}")
+
+            st.markdown("---")
+            st.markdown("**② 패널 구성 맞추기**: 이 데이터의 연령·성별 구성대로 페르소나를 뽑기")
+            comp = composition(df_in, age_col, sex_col, w_col)
+            cdf = pd.DataFrame([{"연령대": k.split("|")[0], "성별": k.split("|")[1], "비율(%)": round(v * 100, 1)}
+                                for k, v in comp.items()])
+            st.dataframe(cdf.pivot(index="연령대", columns="성별", values="비율(%)").reindex(
+                ["20대 이하", "30대", "40대", "50대", "60대 이상"]), width="stretch")
+            if st.button("이 구성으로 패널 뽑기 적용", type="primary"):
+                st.session_state["quota"] = comp
+                st.rerun()
+            if st.session_state.get("quota"):
+                st.success("적용됨: 진열대·FGI·에이전트가 이 구성대로 패널을 뽑습니다. 해제는 왼쪽 사이드바에서.")
+
+# ------------------------------------------------------------------ ⑥ 서비스 구조
+with tabs[5]:
     st.markdown('<div class="section-title">서비스 아키텍처</div>', unsafe_allow_html=True)
     st.graphviz_chart(f"""
 digraph G {{
@@ -643,8 +749,8 @@ digraph G {{
           feature("🔄", "자사 제품 잠식 확인", "진열대에 자사 기존 제품을 함께 두고 신제품이 어디서 점유를 가져오는지 확인"),
           feature("🧓", "모으기 어려운 집단", "FGI로 모으기 어려운 고령층·지방 거주자 반응을 미리 점검")], 3)
 
-# ------------------------------------------------------------------ ⑥ 한계
-with tabs[5]:
+# ------------------------------------------------------------------ ⑦ 한계
+with tabs[6]:
     st.markdown('<div class="section-title">한계와 로드맵</div>', unsafe_allow_html=True)
     grid([feature("✅", "지금 알 수 있는 것",
                   "연령대별 음료 선호의 방향과 대략적인 크기(탄산·이온 선호는 실제 설문과 연령별 1~4%p), "
