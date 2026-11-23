@@ -206,7 +206,9 @@ TOOL_LABEL = {"check_reliability": "신뢰도 확인", "run_shelf_simulation": "
 @st.cache_resource(show_spinner="페르소나 풀 준비 중… (처음 한 번, 약 1분)")
 def pool():
     if not PERSONA_PATH.exists():  # 배포 환경에서는 처음 실행 때 내려받는다
-        download_pool(1)
+        # 배포 서버는 메모리가 작아 일부(기본 3만 명)만 받는다. VM_POOL_ROWS 로 조절.
+        from vm.personas import download_pool_light
+        download_pool_light(int(os.getenv("VM_POOL_ROWS", "30000")))
     return load_pool()
 
 
@@ -774,7 +776,7 @@ with tabs[5]:
                 unsafe_allow_html=True)
     up = st.file_uploader("파일 올리기", type=["csv", "xlsx", "xls"])
     use_sample = st.checkbox("예시 파일로 해 보기 (KREI 공개 집계값으로 만든 가짜 응답자 1,200명)", value=up is None)
-    src = up if up is not None else (Path("data/sample/예시_소비자조사.csv") if use_sample else None)
+    src = up if up is not None else (Path("data/sample/sample_consumer_survey.csv") if use_sample else None)
     if src is None:
         st.info("파일을 올리거나 예시 파일을 선택하세요.")
     else:

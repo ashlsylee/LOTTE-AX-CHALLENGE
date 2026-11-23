@@ -24,6 +24,28 @@ COLUMNS = [
 ]
 
 
+def download_pool_light(max_rows: int = 30000) -> None:
+    """메모리가 작은 서버(Streamlit Cloud 등)용: 첫 파일을 조금씩 나눠 읽어 max_rows명만 저장한다.
+    파일 전체를 한 번에 읽으면 최대 약 1GB를 써서 무료 서버에서 멈출 수 있다."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from huggingface_hub import HfFileSystem
+    path = f"datasets/nvidia/Nemotron-Personas-Korea/data/train-00000-of-{N_TOTAL_SHARDS:05d}.parquet"
+    PERSONA_PATH.parent.mkdir(exist_ok=True)
+    writer, done = None, 0
+    with HfFileSystem().open(path, "rb") as f:
+        for batch in pq.ParquetFile(f).iter_batches(batch_size=5000, columns=COLUMNS):
+            table = pa.Table.from_batches([batch]).slice(0, max_rows - done)
+            writer = writer or pq.ParquetWriter(PERSONA_PATH, table.schema)
+            writer.write_table(table)
+            done += table.num_rows
+            if done >= max_rows:
+                break
+    if writer:
+        writer.close()
+    print(f"총 {done:,}명 저장(경량): {PERSONA_PATH}")
+
+
 def download_pool(shards: int = 1) -> pd.DataFrame:
     parts = []
     for i in range(shards):
