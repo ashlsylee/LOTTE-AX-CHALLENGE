@@ -1,4 +1,4 @@
-"""칠성 버추얼 마켓(가칭) — AI 페르소나 신제품 가상시장 검증 데모.
+"""프리셸프(PreShelf) — AI 페르소나 신제품 가상시장 검증 데모.
 
 실행:  streamlit run app.py
 배포(Streamlit Community Cloud): Secrets에 OPENAI_API_KEY, APP_PASSWORD 를 넣으면
@@ -7,6 +7,7 @@
 import copy
 import glob
 import json
+import re
 import os
 from pathlib import Path
 
@@ -17,18 +18,22 @@ import streamlit as st
 from vm.config import OUT_DIR, PERSONA_PATH
 
 # ---- 서비스 이름: 여기 두 줄만 바꾸면 화면 전체(탭 제목, 상단 제목)에 반영된다
-APP_NAME = "칠성 버추얼 마켓"
-APP_TAGLINE = "AI 소비자 패널로 신제품 컨셉을 미리 걸러내고, 그 결과를 실제 설문으로 검증해 함께 보여줍니다."
+APP_NAME = "프리셸프 PreShelf"
+APP_TAGLINE = "진열대에 오르기 전에, AI 소비자 패널로 신제품 컨셉을 미리 걸러내고 그 결과를 실제 설문으로 검증해 함께 보여줍니다."
 st.set_page_config(page_title=APP_NAME, page_icon="🥤", layout="wide")
 
 # ------------------------------------------------------------------ 배포 설정
+from dotenv import load_dotenv  # noqa: E402
+load_dotenv()
 try:  # Streamlit Cloud의 Secrets → 환경변수 (로컬에서는 .env 사용)
-    for k in ("OPENAI_API_KEY", "VM_MODEL", "VM_AGENT_MODEL"):
+    for k in ("OPENAI_API_KEY", "VM_MODEL", "VM_AGENT_MODEL", "APP_PASSWORD"):
         if k in st.secrets and not os.getenv(k):
             os.environ[k] = st.secrets[k]
-    APP_PASSWORD = st.secrets.get("APP_PASSWORD", "")
 except Exception:
-    APP_PASSWORD = ""
+    pass
+# 서버에 설정된 내 API 키는 이 비밀번호를 아는 사람만 쓸 수 있다(.env 또는 Secrets의 APP_PASSWORD).
+# 자기 API 키를 입력한 사람은 비밀번호 없이 실행할 수 있다.
+APP_PASSWORD = os.getenv("APP_PASSWORD", "")
 
 from vm.llm import LLM  # noqa: E402  (환경변수 설정 뒤에 불러온다)
 from vm.orchestrator import run_agent  # noqa: E402
@@ -152,6 +157,12 @@ def card(label, value, sub=""):
     return f'<div class="card"><div class="lbl">{label}</div><div class="num">{value}</div><div class="sub">{sub}</div></div>'
 
 
+def bold(text: str) -> str:
+    """**굵게**를 <strong>으로 바꾼다. 마크다운은 '**16.8%**였고'처럼 닫는 ** 앞이 문장부호이고
+    뒤에 글자가 붙으면 굵게로 인식하지 못해 **가 그대로 보이기 때문(한국어 조사에서 자주 발생)."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", str(text or ""))
+
+
 def grid(items, n=None):
     """카드 여러 개를 한 줄에 같은 높이로 놓는다."""
     n = n or len(items)
@@ -232,7 +243,7 @@ with st.sidebar:
     with st.expander("✍️ 메모로 컨셉 채우기 (컨셉 정리 에이전트)"):
         memo = st.text_area("자유 메모", placeholder="예) 20대 여성 타깃, 제주 한라봉 넣은 제로 탄산, 500ml 2000원 정도, 상큼하고 칼로리 걱정 없는 느낌",
                             height=90, label_visibility="collapsed")
-        if st.button("컨셉 카드로 정리", disabled=not memo):
+        if st.button("컨셉 카드로 정리", disabled=not memo or not can_run(st.session_state.get("mock_flag", False))):
             try:
                 from vm.concept import parse_concept
                 card_ = parse_concept(LLM(mock=st.session_state.get("mock_flag", False),
@@ -284,8 +295,11 @@ with st.sidebar:
                        "비용은 키 주인 계정에 청구됩니다. 비워 두면 서버에 설정된 키(.env 또는 Secrets)를 씁니다.")
     USER_KEY = st.session_state.get("user_key") or None
     if APP_PASSWORD and not mock and not USER_KEY:
-        pw = st.text_input("실행 비밀번호", type="password", help="공개 데모에서는 저장된 결과만 볼 수 있습니다.")
-        st.session_state["pw_ok"] = (pw == APP_PASSWORD)
+        pw = st.text_input("실행 비밀번호", type="password",
+                           help="서버에 설정된 API 키는 비밀번호를 아는 사람만 쓸 수 있습니다. 자기 키를 위 칸에 넣으면 비밀번호 없이 실행됩니다.")
+        st.session_state["pw_ok"] = bool(pw) and pw == APP_PASSWORD
+        if not st.session_state["pw_ok"]:
+            st.caption("🔒 실행하려면 비밀번호 또는 본인 API 키가 필요합니다. 저장된 결과는 그대로 볼 수 있어요.")
     scenario = scenario_with(name, desc, price, volume, competitors)
     seg = {"sex": None if sex == "전체" else sex, "region": None if region == "전체" else region, "single_only": single}
 
@@ -339,7 +353,7 @@ with tabs[0]:
                 status.update(label="실패", state="error")
                 st.error(f"{type(e).__name__}: {e}")
     if not can_run(mock):
-        st.caption("🔒 공개 데모에서는 실행이 잠겨 있습니다. 아래 '저장된 결과 보기'로 이전 실행을 확인하세요.")
+        st.caption("🔒 실행하려면 왼쪽에 비밀번호 또는 본인 API 키를 넣으세요. 아래 '저장된 결과 보기'는 그대로 볼 수 있어요.")
 
     with st.expander("저장된 결과 보기 (API 없이 시연할 때)"):
         runs = sorted(glob.glob(str(OUT_DIR / "agent_*")), reverse=True)
@@ -355,7 +369,7 @@ with tabs[0]:
     if res:
         st.markdown("---")
         with st.container(border=True):
-            st.markdown(res["report"] or "(리포트 없음)")
+            st.markdown(bold(res["report"]) or "(리포트 없음)", unsafe_allow_html=True)
         with st.expander("에이전트가 실행한 단계 (trace)"):
             for t in res["trace"]:
                 st.markdown(f"**[{t['step']}] {TOOL_LABEL.get(t['tool'], t['tool'])}** `{json.dumps(t['args'], ensure_ascii=False)}`")
@@ -423,7 +437,7 @@ with tabs[1]:
         imp = st.session_state.get("improve")
         if imp:
             grid([feature("💡", f"{v['label']} · {v['name']}",
-                          f"{v['description']}<br><b>{v['price']:,}원</b><br><span class='muted'>근거: {v['rationale']}</span>")
+                          f"{v['description']}<br><b>{v['price']:,}원</b><br><span class='muted'>근거: {bold(v['rationale'])}</span>")
                   for v in imp["variants"]])
             if i2.button("② 같은 패널로 재검증", type="primary", disabled=not can_run(mock)):
                 rows, llm2 = [], LLM(mock=mock, api_key=USER_KEY)
@@ -493,12 +507,12 @@ with tabs[2]:
                     to = f" → {t['reply_to']}" if t.get("reply_to") else ""
                     st.markdown(f'<div class="bubble"><div class="who">{t["speaker"]}{to}'
                                 f'<span class="badge {BADGE.get(t["stance"], "b-mid")}">{t["stance"]}</span></div>'
-                                f'<div class="txt">{t["utterance"]}</div></div>', unsafe_allow_html=True)
+                                f'<div class="txt">{bold(t["utterance"])}</div></div>', unsafe_allow_html=True)
         with right:
             sm = fres["summary"]
             for title, key_, icon in [("핵심 반응", "key_points", "🗣"), ("우려", "concerns", "⚠️"),
                                       ("개선 아이디어", "improvements", "💡"), ("설득 장면", "persuasion", "🔁")]:
-                st.markdown(feature(icon, title, "<br>".join(f"· {x}" for x in sm.get(key_, [])) or "-"),
+                st.markdown(feature(icon, title, "<br>".join(f"· {bold(x)}" for x in sm.get(key_, [])) or "-"),
                             unsafe_allow_html=True)
                 st.write("")
             tt = pd.DataFrame(fres["turns"]).pivot(index="speaker", columns="round", values="stance")
