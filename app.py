@@ -79,6 +79,10 @@ code {{ background: {FIELD} !important; color: #FFFFFF !important; }}
 /* 표(캔버스로 그려져 CSS가 안 먹음)는 색을 반전해 어둡게 */
 [data-testid="stDataFrame"], [data-testid="stDataEditor"] {{ filter: invert(0.92) hue-rotate(180deg); border-radius: 10px; }}
 [data-testid="stStatusWidget"], [data-testid="stStatus"] {{ color: #FFFFFF !important; }}
+[data-testid="stAlertContainer"] {{ background: rgba(255,255,255,0.06) !important; border: 1px solid #3F3F46 !important; }}
+[data-testid="stAlertContentSuccess"] ~ *, [data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {{ border-color: #22C55E !important; }}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {{ border-color: #F59E0B !important; }}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {{ border-color: {RED} !important; }}
 """
 CSS = f"""
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
@@ -137,8 +141,8 @@ p, li {{ line-height: 1.7; }}
 .grid {{ display: grid; gap: 1rem; margin: 0.2rem 0 1rem 0; align-items: stretch; }}
 .grid .card {{ height: 100%; box-sizing: border-box; }}
 .g2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .g3 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
-.g4 {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }}
-@media (max-width: 900px) {{ .g3, .g4 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+.g4 {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }} .g6 {{ grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .5rem; }}
+@media (max-width: 900px) {{ .g3, .g4 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .g6 {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }} }}
 @media (max-width: 600px) {{ .g2, .g3, .g4 {{ grid-template-columns: 1fr; }} }}
 .sources {{ margin-top: 1rem; font-size: 0.82rem; color: {T["sub"]}; line-height: 1.8; }}
 .sources a {{ color: {T["chip_text"]}; text-decoration: none; border-bottom: 1px solid rgba(228,0,43,0.4); }}
@@ -252,6 +256,23 @@ with st.sidebar:
     if t2.button("☀️ 라이트", width="stretch", type="secondary" if DARK else "primary"):
         st.session_state["theme"] = "light"
         st.rerun()
+    from vm import project as PJ
+    st.markdown('<div class="eyebrow">Project</div>', unsafe_allow_html=True)
+    _projs = PJ.list_projects()
+    _labels = {p["id"]: p["name"] for p in _projs}
+    _opts = ["(프로젝트 없이 사용)"] + [p["id"] for p in _projs] + ["+ 새 프로젝트"]
+    _cur = st.session_state.get("project_id")
+    _sel = st.selectbox("프로젝트", _opts, index=_opts.index(_cur) if _cur in _opts else 0,
+                        format_func=lambda x: _labels.get(x, x),
+                        help="프로젝트를 고르면 실행 결과가 컨셉 버전별로 기록되고 ⓪ 프로젝트 탭에서 단계·결정을 관리합니다.")
+    if _sel == "+ 새 프로젝트":
+        _pn = st.text_input("프로젝트 이름", placeholder="예) 제주 청귤 제로 2027 S/S")
+        _goal = st.text_input("목표(선택)", placeholder="예) 20~30대 1인 가구용 제로 탄산 가격 결정")
+        if st.button("프로젝트 만들기", type="primary", disabled=not _pn):
+            st.session_state["project_id"] = PJ.create(_pn, _goal)["id"]
+            st.rerun()
+    else:
+        st.session_state["project_id"] = None if _sel.startswith("(") else _sel
     st.markdown('<div class="eyebrow">Concept Card</div>', unsafe_allow_html=True)
     st.markdown("### 신제품 컨셉")
     c = next(p for p in BASE["products"] if p["id"] == CONCEPT_ID)
@@ -327,8 +348,21 @@ with st.sidebar:
     scenario = scenario_with(name, desc, price, volume, competitors)
     COND = {"name": name, "price": int(price), "desc": desc, "volume": int(volume), "age": list(age),
             "sex": None if sex == "전체" else sex, "region": None if region == "전체" else region, "single": single,
-            "shelf": [(p["name"], p["price"]) for p in competitors]}
+            "shelf": [(p["name"], p["price"]) for p in competitors], "quota": bool(st.session_state.get("quota"))}
     seg = {"sex": None if sex == "전체" else sex, "region": None if region == "전체" else region, "single_only": single}
+
+def plog(kind: str, summary: dict, path: str = ""):
+    """프로젝트를 고른 상태면 실행을 지금 컨셉 버전에 기록한다(카드가 바뀌었으면 새 버전 자동 생성)."""
+    pid = st.session_state.get("project_id")
+    if not pid:
+        return
+    from vm import project as PJ
+    p = PJ.load(pid)
+    v_before = len(p["versions"])
+    PJ.log_run(p, COND, kind, {**summary, **({"mock": "예"} if mock else {})}, path)
+    if len(p["versions"]) > v_before:
+        st.toast(f"컨셉이 바뀌어 새 버전 {p['versions'][-1]['id']}로 저장했어요.")
+
 
 def make_panel(n: int):
     """패널 추출: ⑤ 데이터 연결에서 고객 구성을 적용했으면 그 비율대로, 아니면 왼쪽 타깃 조건대로."""
@@ -350,11 +384,104 @@ st.markdown(f"""
   </div>
 </div>""", unsafe_allow_html=True)
 
-tabs = st.tabs(["① 컨셉 검증 · AI 에이전트", "② 진열대 시뮬레이션", "③ 가상 FGI", "④ 신뢰도 검증",
+tabs = st.tabs(["⓪ 프로젝트", "① 컨셉 검증 · AI 에이전트", "② 진열대 시뮬레이션", "③ 가상 FGI", "④ 신뢰도 검증",
                 "⑤ 데이터 연결", "⑥ 서비스 구조·운영", "⑦ 한계와 로드맵"])
 
-# ------------------------------------------------------------------ ① 에이전트
+# ------------------------------------------------------------------ ⓪ 프로젝트
 with tabs[0]:
+    from vm import project as PJ
+    pid = st.session_state.get("project_id")
+    if not pid:
+        st.markdown('<div class="section-title">프로젝트</div>', unsafe_allow_html=True)
+        st.markdown('<p class="muted">신제품 하나의 검증 과정을 컨셉 버전·실행 기록·단계 결정·실제 결과로 묶어 관리합니다. '
+                    '왼쪽 위 <b>프로젝트 → + 새 프로젝트</b>로 시작하세요. 프로젝트 없이도 다른 탭은 그대로 쓸 수 있어요.</p>',
+                    unsafe_allow_html=True)
+        grid([feature("📁", "버전 관리", "컨셉 카드가 바뀌면 v1, v2…로 자동 저장되고 실행 결과가 버전별로 쌓여요"),
+              feature("🚦", "단계 게이트", "운영 6단계 중 어디까지 왔는지, 어떤 근거로 진행·보류·중단했는지 기록해요"),
+              feature("🎯", "사후 검증", "실제 조사 결과를 넣으면 AI 예측과 나란히 비교해 이 도구의 정확도를 쌓아요")])
+    else:
+        proj = PJ.load(pid)
+        st.markdown(f'<div class="section-title">{proj["name"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<p class="muted">목표 · {proj.get("goal") or "-"} &nbsp;|&nbsp; 생성 {proj["created"]} · 수정 {proj.get("updated", "")}</p>',
+                    unsafe_allow_html=True)
+        cur_v = PJ.current_version(proj, COND)
+        # 지금 카드 상태
+        c1, c2 = st.columns([3, 1])
+        if cur_v:
+            c1.success(f"지금 왼쪽 카드 = **{cur_v['id']}** ({cur_v['card']['name']} · {cur_v['card']['price']:,}원)")
+        else:
+            c1.info(f"지금 왼쪽 카드({name} · {price:,}원)는 아직 저장되지 않은 새 컨셉이에요. 실행하면 자동으로 새 버전이 됩니다.")
+            if c2.button("새 버전으로 저장", type="primary"):
+                PJ.ensure_version(proj, COND, "수동 저장")
+                st.rerun()
+        # 단계 게이트
+        if proj["versions"]:
+            vsel = st.selectbox("버전", [v["id"] for v in proj["versions"]],
+                                index=[v["id"] for v in proj["versions"]].index(cur_v["id"]) if cur_v else len(proj["versions"]) - 1,
+                                format_func=lambda vid: next(f"{v['id']} · {v['card']['name']} · {v['card']['price']:,}원"
+                                                             for v in proj["versions"] if v["id"] == vid))
+            v = next(x for x in proj["versions"] if x["id"] == vsel)
+            stg = v.get("stage", 1)
+            steps_html = "".join(
+                f'<div class="card" style="padding:.8rem 1rem;{"border-color:" + RED + ";background:rgba(228,0,43,.12);" if i <= stg else "opacity:.55;"}">'
+                f'<div class="lbl">{i}단계</div><h4 style="margin:0">{nm}</h4></div>'
+                for i, nm in enumerate(PJ.STAGES, 1))
+            st.markdown(f'<div class="grid g6">{steps_html}</div>',
+                        unsafe_allow_html=True)
+            pred = PJ.latest_prediction(proj, vsel)
+            info = [card("현재 단계", f"{stg}. {PJ.STAGES[stg - 1]}", v.get("decision", "결정 전") + (" · 실제 조사 대상" if v.get("to_survey") else "")),
+                    card("최근 신제품 구매 비율", f"{pred.get('신제품 구매 비율(%)', '-')}%", "가장 최근 시뮬레이션 기준"),
+                    card("실행 기록", f"{sum(r['version'] == vsel for r in proj['runs'])}건", "이 버전에서 돌린 실험 수")]
+            grid(info)
+            if st.button(f"{vsel} 카드를 왼쪽에 불러오기"):
+                cd = v["card"]
+                st.session_state["pending_card"] = {"c_name": cd["name"], "c_price": cd["price"], "c_desc": cd["desc"], "c_vol": cd["volume"]}
+                st.rerun()
+
+            with st.expander("🚦 단계 결정 기록하기 (진행·보류·중단)"):
+                dc = st.radio("결정", PJ.DECISIONS, horizontal=True, key="pj_dec")
+                note = st.text_area("근거", placeholder="예) 2,400원은 구매 비율이 1,900원보다 5%p 낮아 1,900원안으로 진행", key="pj_note")
+                to_s = st.checkbox("이 버전을 실제 조사(FGI·설문) 대상으로 선정", key="pj_tosurvey")
+                if st.button("결정 저장", type="primary", disabled=not note):
+                    PJ.decide(proj, vsel, dc, note, to_s)
+                    st.rerun()
+
+            with st.expander("🎯 실제 조사 결과 입력 (AI 예측과 비교)"):
+                st.caption("실제 설문·판매 결과를 넣으면 같은 지표의 AI 예측과 나란히 기록합니다. 쌓일수록 이 도구가 얼마나 맞는지 알 수 있어요.")
+                mt = st.selectbox("지표", ["신제품 구매 비율(%)", "앞으로 사 볼 의향(%)", "직접 입력"], key="pj_metric")
+                if mt == "직접 입력":
+                    mt = st.text_input("지표 이름", key="pj_metric_free")
+                a1, a2, a3 = st.columns(3)
+                av = a1.number_input("실제 값(%)", 0.0, 100.0, 0.0, 0.1, key="pj_actual")
+                an = a2.number_input("표본 수", 0, 1000000, 0, key="pj_n")
+                asrc = a3.text_input("출처", placeholder="예) 2026-12 소비자 설문", key="pj_src")
+                pv = pred.get(mt) if isinstance(pred.get(mt), (int, float)) else None
+                st.caption(f"비교할 AI 예측값: {pv if pv is not None else '없음(이 지표의 시뮬레이션 기록 없음)'}")
+                if st.button("실제 결과 저장", disabled=not (mt and asrc)):
+                    PJ.add_actual(proj, vsel, mt, float(av), pv, int(an) or None, asrc)
+                    st.rerun()
+
+        if proj["runs"]:
+            st.markdown("**실행 기록**")
+            st.dataframe(pd.DataFrame([{"시간": r["time"], "버전": r["version"], "종류": r["kind"], "조건": r["target"],
+                                        "주요 결과": ", ".join(f"{k} {v_}" for k, v_ in r["summary"].items())}
+                                       for r in reversed(proj["runs"])]), hide_index=True, width="stretch")
+        if proj["decisions"]:
+            st.markdown("**결정 기록**")
+            st.dataframe(pd.DataFrame([{"시간": d["time"], "버전": d["version"], "결정": d["decision"],
+                                        "실제 조사": "선정" if d["to_survey"] else "", "근거": d["note"]}
+                                       for d in reversed(proj["decisions"])]), hide_index=True, width="stretch")
+        if proj["actuals"]:
+            st.markdown("**실제 결과 vs AI 예측 (사후 검증)**")
+            st.dataframe(pd.DataFrame([{"버전": a["version"], "지표": a["metric"], "실제": a["actual"], "AI 예측": a["predicted"],
+                                        "차이(%p)": None if a["predicted"] is None else round(a["predicted"] - a["actual"], 1),
+                                        "표본": a["n"], "출처": a["source"]} for a in proj["actuals"]]),
+                         hide_index=True, width="stretch")
+        st.download_button("📄 프로젝트 보고서 내려받기 (Markdown)", PJ.export_markdown(proj),
+                           file_name=f"{proj['name']}_보고서.md", mime="text/markdown")
+
+# ------------------------------------------------------------------ ① 에이전트
+with tabs[1]:
     st.markdown('<div class="section-title">시장 검증 에이전트</div>', unsafe_allow_html=True)
     st.markdown('<p class="muted">질문을 받으면 에이전트가 스스로 계획 → 도구 실행 → 결과 확인 → 추가 실험 → 리포트 작성까지 진행합니다.</p>',
                 unsafe_allow_html=True)
@@ -403,6 +530,10 @@ with tabs[0]:
                                 quota=st.session_state.get("quota"))
                 status.update(label=f"완료 · 새 페르소나 응답 {res['api_calls']}개 (예산 {res['budget']})", state="complete")
                 st.session_state["agent_result"] = {**res, "cond": dict(COND)}
+                _sims = [t["result"] for t in res["trace"] if t["tool"] == "run_shelf_simulation" and "buy_share_%" in t["result"]]
+                plog("에이전트", {"요청": question[:40]} | ({"신제품 구매 비율(%)": _sims[-1]["buy_share_%"].get(name),
+                                                          "앞으로 사 볼 의향(%)": _sims[-1].get("concept_try_%")} if _sims else {}),
+                     res["out_dir"])
             except Exception as e:
                 status.update(label="실패", state="error")
                 st.error(f"{type(e).__name__}: {e}")
@@ -432,7 +563,7 @@ with tabs[0]:
         st.caption(f"저장 위치: {res['out_dir']}")
 
 # ------------------------------------------------------------------ ② 진열대
-with tabs[1]:
+with tabs[2]:
     st.markdown('<div class="section-title">가상 진열대 시뮬레이션</div>', unsafe_allow_html=True)
     st.markdown('<p class="muted">각 페르소나에게 "이 프로필과 비슷한 100명이 이 진열대 앞에서 어떻게 나뉠지"를 묻고 평균합니다. '
                 '한 사람에게 답 하나를 받으면 대표 답으로 쏠리는 문제가 있어 이 방식을 채택했습니다(③ 참고).</p>', unsafe_allow_html=True)
@@ -445,6 +576,10 @@ with tabs[1]:
                 df = run(scenario, panel, llm, 42, mode="prob")
             st.session_state["sim"] = (df, scenario, llm.api_calls)
             st.session_state["sim_cond"] = dict(COND)
+            _ok = df[df["error"] == ""]
+            plog("진열대", {"신제품 구매 비율(%)": round(_ok[f"p_{CONCEPT_ID}"].mean() * 100, 1),
+                          "앞으로 사 볼 의향(%)": round(_ok[f"try_{CONCEPT_ID}"].mean() * 100, 1),
+                          "지불의사(원)": int(_ok[f"max_price_{CONCEPT_ID}"].median()), "인원": len(_ok)})
             st.session_state["sim_panel"] = panel
             st.session_state.pop("improve", None)
         except Exception as e:
@@ -508,6 +643,9 @@ with tabs[1]:
                                      "사 볼 의향(%)": round(o2[f"try_{CONCEPT_ID}"].mean() * 100, 1),
                                      "지불의사(원)": int(o2[f"max_price_{CONCEPT_ID}"].median()), "가격(원)": v["price"]})
                 imp["result"] = pd.DataFrame(rows)
+                _best = imp["result"].sort_values("구매 비율(%)", ascending=False).iloc[0]
+                plog("개선 비교", {"1위 안": _best["안"], "1위 구매 비율(%)": float(_best["구매 비율(%)"]),
+                                  "원안 구매 비율(%)": float(imp["result"].iloc[0]["구매 비율(%)"])})
             if "result" in imp:
                 r = imp["result"]
                 ch = alt.Chart(r).mark_bar(cornerRadiusEnd=6, height=24).encode(
@@ -519,7 +657,7 @@ with tabs[1]:
                 st.caption("차이가 3%p 미만이면 뚜렷한 차이로 보지 않습니다(③ 신뢰도 검증의 실제 대비 오차 수준).")
 
 # ------------------------------------------------------------------ ③ 가상 FGI
-with tabs[2]:
+with tabs[3]:
     st.markdown('<div class="section-title">가상 FGI (좌담회)</div>', unsafe_allow_html=True)
     st.markdown('<p class="muted">타깃 패널에서 성별·연령이 섞인 참여자들이 3라운드 동안 서로의 말을 듣고 이야기합니다. '
                 '라운드마다 질문을 바꾸고(첫인상 → 걸리는 점 → 무엇이 바뀌면 살지), 매 라운드 구매 입장을 기록해 '
@@ -536,6 +674,8 @@ with tabs[2]:
             (out / "fgi.json").write_text(json.dumps({"concept": name, "price": price, "cond": COND, **fres}, ensure_ascii=False, indent=1),
                                           encoding="utf-8")
             st.session_state["fgi"] = {**fres, "cond": dict(COND)}
+            plog("FGI", {"최종 입장": " / ".join(f"{k} {v}" for k, v in fres["final_stance"].items()),
+                         "입장 바뀐 사람": len(fres["stance_changed"])}, str(out))
         except Exception as e:
             st.error(f"{type(e).__name__}: {e}")
     saved = sorted(glob.glob(str(OUT_DIR / "fgi_*" / "fgi.json")), reverse=True)
@@ -579,7 +719,7 @@ with tabs[2]:
             st.dataframe(tt, width="stretch")
 
 # ------------------------------------------------------------------ ④ 신뢰도
-with tabs[3]:
+with tabs[4]:
     st.markdown('<div class="section-title">이 패널을 어디까지 믿을 수 있나</div>', unsafe_allow_html=True)
     st.markdown('<p class="muted">공개된 실제 정부 설문(한국농촌경제연구원 식품소비행태조사 2023~2025, 성인 약 1.7만 명)과 '
                 '같은 질문을 페르소나에게 묻고 비교했습니다. 평가 규칙은 실행 전에 정해 두었습니다.</p>', unsafe_allow_html=True)
@@ -625,7 +765,7 @@ with tabs[3]:
         st.caption(f"결과 파일: {f}")
 
 # ------------------------------------------------------------------ ⑤ 데이터 연결
-with tabs[4]:
+with tabs[5]:
     from vm.connect import (answer_options, ask_question, compare, composition, load_table, reference_dist,
                             save_result, to_age_bucket)
     st.markdown('<div class="section-title">데이터 연결</div>', unsafe_allow_html=True)
@@ -680,6 +820,7 @@ with tabs[4]:
                 r = compare(sim, ref, opts)
                 out = save_result(q, opts, r, {"source": getattr(src, "name", str(src)), "n_per_age": npa, "mock": mock})
                 st.session_state["connect_res"] = (q, opts, r, ref, str(out))
+                plog("데이터 검증", {"질문": q[:30], "오차(%p)": r["mae"], "무작위(%p)": r["random_mae"]}, str(out))
             if "connect_res" in st.session_state:
                 q_, opts_, r, ref, out = st.session_state["connect_res"]
                 grid([card("페르소나 vs 실제 오차", f"{r['mae']:.1f}%p", "연령대별 분포 MAE"),
@@ -710,7 +851,7 @@ with tabs[4]:
                 st.success("적용됨: 진열대·FGI·에이전트가 이 구성대로 패널을 뽑습니다. 해제는 왼쪽 사이드바에서.")
 
 # ------------------------------------------------------------------ ⑥ 서비스 구조
-with tabs[5]:
+with tabs[6]:
     st.markdown('<div class="section-title">서비스 아키텍처</div>', unsafe_allow_html=True)
     st.graphviz_chart(f"""
 digraph G {{
@@ -750,7 +891,7 @@ digraph G {{
           feature("🧓", "모으기 어려운 집단", "FGI로 모으기 어려운 고령층·지방 거주자 반응을 미리 점검")], 3)
 
 # ------------------------------------------------------------------ ⑦ 한계
-with tabs[6]:
+with tabs[7]:
     st.markdown('<div class="section-title">한계와 로드맵</div>', unsafe_allow_html=True)
     grid([feature("✅", "지금 알 수 있는 것",
                   "연령대별 음료 선호의 방향과 대략적인 크기(탄산·이온 선호는 실제 설문과 연령별 1~4%p), "
