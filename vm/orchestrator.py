@@ -63,7 +63,7 @@ AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 
 - 숫자는 반드시 도구 결과에 있는 값만 인용하세요. 추측한 숫자를 만들지 마세요.
 - concept_buy_ci95_%는 페르소나들 사이의 의견 일치 범위일 뿐, 실제 시장의 오차 범위가 아닙니다.
   실제와의 오차는 check_reliability의 four_rate_mae(약 2%p)·fav_mae(약 3%p) 수준이므로,
-  두 조건의 차이가 3%p보다 작으면 "차이가 뚜렷하지 않다"고 쓰고 단정하지 마세요.
+  두 조건의 차이가 [판단 기준]의 값(기본 3%p)보다 작으면 "차이가 뚜렷하지 않다"고 쓰고 단정하지 마세요.
 - 연령 표현: '30대'는 30~39세입니다. '20~30대'면 age_min 20, age_max 39.
 - FGI 발언은 소수 참여자의 정성적 의견이므로 수치처럼 일반화하지 마세요.
 - 구성: 요약(결론 2~3줄) / 근거(실행한 실험과 수치) / 타깃·가격·문구 제안 / 신뢰도와 한계 / 다음 단계(실제 조사로 확인할 것)
@@ -308,7 +308,7 @@ def scripted_plan(request: str):
 
 def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 10, model: str | None = None,
               agent_model: str | None = None, mock: bool = False, on_step=None, api_key: str | None = None,
-              quota: dict | None = None) -> dict:
+              quota: dict | None = None, min_diff: float = 3.0) -> dict:
     """에이전트 1회 실행. CLI와 화면(app.py)이 같이 쓴다. on_step(step, tool, args, result)로 진행을 알린다."""
     load_dotenv()
     llm = LLM(model, mock=mock, api_key=api_key)
@@ -333,7 +333,8 @@ def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 
         agent_model = agent_model or os.getenv("VM_AGENT_MODEL") or llm.model
         context = (f"[요청]\n{request}\n\n[기본 시나리오]\n{json.dumps(scenario, ensure_ascii=False)}\n"
                    "※ 검증 대상은 기본 시나리오의 신제품(concept_id)입니다. 요청 문장의 제품명·가격이 시나리오와 다르면 "
-                   "리포트 맨 앞에 그 차이를 밝히고, 시나리오 기준으로 진행하세요.\n\n"
+                   "리포트 맨 앞에 그 차이를 밝히고, 시나리오 기준으로 진행하세요.\n"
+                   f"[판단 기준] 두 조건의 차이가 {min_diff}%p 미만이면 뚜렷한 차이로 보지 않습니다.\n\n"
                    f"[예산] 페르소나 호출 {budget}회, 최대 {max_steps}단계")
         messages = [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": context}]
         for step in range(1, max_steps + 1):

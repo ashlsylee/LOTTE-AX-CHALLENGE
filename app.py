@@ -242,6 +242,20 @@ def latest(pattern):
     return files[-1] if files else None
 
 
+# ---- 평가 규칙: 결과를 보기 전에 정한 기준(④ 신뢰도 검증 탭에서 확인·조절, 바꾸면 표시·기록됨)
+RULE_DEFAULTS = {
+    "tie": 0.3,            # 설정 선택: 1순위 분포 오차 차이가 이보다 작으면 동률 → 탄산·이온 비율 오차로 결정 (%p)
+    "min_diff": 3.0,       # 두 조건(가격·문구 등) 차이가 이보다 작으면 '뚜렷하지 않음' (%p)
+    "random_margin": 0.3,  # 무작위 기준선보다 이만큼 이상 낮아야 '무작위보다 나음' (%p)
+    "min_n": 30,           # 판단용 최소 인원(연령대당)
+}
+RULE_LABELS = {"tie": "동률로 보는 차이 (설정 선택)", "min_diff": "뚜렷한 차이로 보는 최소값 (가격·문구 비교)",
+               "random_margin": "무작위보다 나음 판정 여유", "min_n": "판단용 최소 인원 (연령대당)"}
+st.session_state.setdefault("rules", dict(RULE_DEFAULTS))
+st.session_state.setdefault("rules_log", [])
+RULES = st.session_state["rules"]
+
+
 def can_run(mock: bool) -> bool:
     """실제 실행(비용 발생) 권한: 로컬이거나, 자기 API 키를 넣었거나, 배포에서 비밀번호를 맞힌 경우."""
     if mock or not APP_PASSWORD or st.session_state.get("user_key"):
@@ -529,6 +543,7 @@ with tabs[1]:
                                 unsafe_allow_html=True)
             try:
                 res = run_agent(question, scenario, budget=int(budget), mock=mock, on_step=on_step, api_key=USER_KEY,
+                                min_diff=RULES["min_diff"],
                                 quota=st.session_state.get("quota"))
                 status.update(label=f"완료 · 새 페르소나 응답 {res['api_calls']}개 (예산 {res['budget']})", state="complete")
                 st.session_state["agent_result"] = {**res, "cond": dict(COND)}
@@ -656,7 +671,7 @@ with tabs[2]:
                     tooltip=list(r.columns)).properties(height=40 * len(r) + 20)
                 st.altair_chart(style_chart(ch), width="stretch")
                 st.dataframe(r, hide_index=True, width="stretch")
-                st.caption("차이가 3%p 미만이면 뚜렷한 차이로 보지 않습니다(③ 신뢰도 검증의 실제 대비 오차 수준).")
+                st.caption(f"차이가 {RULES['min_diff']}%p 미만이면 뚜렷한 차이로 보지 않습니다(④ 신뢰도 검증의 평가 규칙).")
 
 # ------------------------------------------------------------------ ③ 가상 FGI
 with tabs[3]:
@@ -730,6 +745,71 @@ with tabs[4]:
         st.info("설문 재현 결과가 없습니다. 터미널에서 `python -m vm.survey --n-per-age 30` 을 실행하세요.")
     else:
         t = pd.read_csv(f, index_col=0)
+        with st.expander("📏 평가 규칙 보기·조절 (결과를 보기 전에 정한 기준)", expanded=False):
+            changed = {k: v for k, v in RULES.items() if v != RULE_DEFAULTS[k]}
+            if changed:
+                st.warning("기본값과 다른 기준을 쓰는 중이에요: " + ", ".join(f"{RULE_LABELS[k]} {RULE_DEFAULTS[k]} → {v}"
+                                                                         for k, v in changed.items())
+                           + ". 결과를 본 뒤 기준을 바꾸면 '결과에 맞춘 조정'으로 보일 수 있어 변경 기록을 남깁니다.", icon="⚠️")
+            st.markdown("**고정 규칙** (바꾸려면 실험을 다시 설계해야 하는 항목)")
+            st.dataframe(pd.DataFrame([
+                ["주 지표", "연령대별 '좋아하는 음료 1순위' 분포 오차(fav_mae)", "가장 작은 조건을 기본 설정으로 채택"],
+                ["보조 지표", "탄산·이온 4종 1순위 비율 오차 · 연령 방향 일치도", "동률일 때 결정 · 해석용"],
+                ["검증 지표", "제로 음료 섭취 빈도 오차(2025)", "설정 선택에 쓰지 않음(과적합 점검)"],
+                ["참고선", "실제 설문끼리 연도 비교 1.2~1.8%p · 무작위 응답", "오차 수준 해석"],
+                ["기준 데이터", "KREI 식품소비행태조사 성인 2023~2025, 개인 가중치", "연도 가중 0.2 / 0.3 / 0.5, 70대 이상은 60대 이상으로 합침"],
+            ], columns=["구분", "내용", "쓰임"]), hide_index=True, width="stretch")
+            st.markdown("**조절 가능한 기준** (화면 판정·에이전트 리포트에 바로 반영)")
+            if st.session_state.pop("rules_reset", False):  # 되돌리기: 입력칸 값도 기본값으로
+                for k in RULE_DEFAULTS:
+                    st.session_state[f"rule_{k}"] = RULE_DEFAULTS[k]
+            for k in RULE_DEFAULTS:
+                st.session_state.setdefault(f"rule_{k}", RULES[k])
+            r1, r2 = st.columns(2)
+            r1.number_input(RULE_LABELS["tie"], 0.0, 5.0, step=0.1, key="rule_tie", help=f"기본 {RULE_DEFAULTS['tie']}%p")
+            r2.number_input(RULE_LABELS["min_diff"], 0.5, 10.0, step=0.5, key="rule_min_diff",
+                            help=f"기본 {RULE_DEFAULTS['min_diff']}%p · 실제 대비 오차(약 2~3%p)를 근거로 정함")
+            r1.number_input(RULE_LABELS["random_margin"], 0.0, 5.0, step=0.1, key="rule_random_margin",
+                            help=f"기본 {RULE_DEFAULTS['random_margin']}%p")
+            r2.number_input(RULE_LABELS["min_n"], 5, 100, step=5, key="rule_min_n",
+                            help=f"기본 {RULE_DEFAULTS['min_n']}명 · 10명이면 우연 오차가 3%p 이상 커짐")
+            changed_now = False
+            for k in RULE_DEFAULTS:
+                v = st.session_state[f"rule_{k}"]
+                if v != RULES[k]:
+                    entry = {"time": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"), "rule": RULE_LABELS[k], "old": RULES[k], "new": v}
+                    st.session_state["rules_log"].append(entry)
+                    try:
+                        OUT_DIR.mkdir(parents=True, exist_ok=True)
+                        with open(OUT_DIR / "rules_log.jsonl", "a", encoding="utf-8") as fh:
+                            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                    except Exception:
+                        pass
+                    RULES[k] = v
+                    changed_now = True
+            if changed_now:
+                st.rerun()  # 바뀐 기준을 화면 전체(경고·판정)에 바로 반영
+            if st.button("기본값으로 되돌리기", disabled=RULES == RULE_DEFAULTS):
+                st.session_state["rules"].update(RULE_DEFAULTS)
+                st.session_state["rules_reset"] = True
+                st.rerun()
+            # 지금 기준으로 다시 판정
+            cand = t.drop(index=[x for x in ["실제(KREI)", "무작위 기준선"] if x in t.index]).dropna(subset=["fav_mae"])
+            if len(cand):
+                best = cand["fav_mae"].min()
+                tied = cand[cand["fav_mae"] - best < RULES["tie"]]
+                pick = tied.sort_values("four_rate_mae").index[0]
+                meta_f = Path(f).parent / "meta.json"
+                npa = json.loads(meta_f.read_text(encoding="utf-8")).get("n_per_age") if meta_f.exists() else None
+                rand = t.loc["무작위 기준선", "fav_mae"] if "무작위 기준선" in t.index else None
+                grid([card("지금 기준의 선택", str(pick), f"동률 후보 {', '.join(tied.index)}" if len(tied) > 1 else "단독 최소"),
+                      card("연령대당 인원", f"{npa or '-'}명", "판단용 기준 충족" if (npa or 0) >= RULES["min_n"] else
+                           f"기준({RULES['min_n']}명) 미달 · 참고용"),
+                      card("무작위 대비", "나음" if rand is not None and t.loc[pick, "fav_mae"] < rand - RULES["random_margin"] else "무작위 수준",
+                           f"{t.loc[pick, 'fav_mae']:.2f} vs 무작위 {rand:.2f}" if rand is not None else "")])
+            if st.session_state["rules_log"]:
+                st.markdown("**기준 변경 기록**")
+                st.dataframe(pd.DataFrame(st.session_state["rules_log"]), hide_index=True, width="stretch")
         if "prob" in t.index and "base" in t.index:
             grid([card("탄산·이온 선호 오차", f"{t.loc['prob', 'four_rate_mae']:.1f}%p", f"기본 방식 {t.loc['base', 'four_rate_mae']:.1f}%p"),
                   card("연령 방향 일치도", f"{t.loc['prob', 'four_age_corr']:.2f}", f"기본 방식 {t.loc['base', 'four_age_corr']:.2f}"),
@@ -827,7 +907,7 @@ with tabs[5]:
                 q_, opts_, r, ref, out = st.session_state["connect_res"]
                 grid([card("페르소나 vs 실제 오차", f"{r['mae']:.1f}%p", "연령대별 분포 MAE"),
                       card("무작위 기준선", f"{r['random_mae']:.1f}%p", "보기를 균등하게 찍었을 때"),
-                      card("판정", "무작위보다 나음" if r["mae"] < r["random_mae"] - 0.3 else "무작위 수준",
+                      card("판정", "무작위보다 나음" if r["mae"] < r["random_mae"] - RULES["random_margin"] else "무작위 수준",
                            f"응답 {r['n_ok']}명 · 연령대당 인원이 적으면 우연 오차가 큼")])
                 pick_age = st.radio("연령대", r["ages"], horizontal=True)
                 t_ = r["table"][r["table"]["연령대"] == pick_age].melt(id_vars=["연령대", "보기"], var_name="구분", value_name="비율")
