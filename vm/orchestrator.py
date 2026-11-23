@@ -9,6 +9,8 @@
 - compare_prices      : 같은 패널로 신제품 가격만 바꿔 비교(가격 대조실험)
 - compare_concepts    : 같은 패널로 컨셉 문구 A/B 비교
 - get_reasons         : 시뮬레이션의 구매·비구매 이유 표본 보기
+- run_fgi             : 가상 좌담회(페르소나 4~6명이 라운드별로 대화, 입장 변화 추적)
+- suggest_improvements: 비구매 이유를 근거로 개선 컨셉 제안 → compare_concepts로 재검증
 - write_report        : 최종 리포트 제출(종료)
 
 안전장치
@@ -33,6 +35,10 @@ from dotenv import load_dotenv
 from .config import OUT_DIR
 from .llm import LLM
 from .personas import load_pool, sample_panel
+from .concept import suggest_improvements
+from .fgi import ROUNDS as FGI_ROUNDS
+from .fgi import compact as fgi_compact
+from .fgi import run_fgi
 from .simulate import load_scenario, run, shares_of
 
 MAX_PANEL = 100
@@ -48,6 +54,9 @@ AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 
    (예: 예산 150이면 기본 50명 1회 + 가격 2안 × 50명). 같은 조건의 실행을 반복하지 마세요.
 6. 요청의 핵심 질문(예: 가격이 적당한가 → 가격 비교)에 답하는 실험을 가장 먼저 하세요.
    예산 부족 오류가 나면 다른 실험으로 넘어가지 말고, 안 개수나 인원을 줄여 핵심 실험을 다시 시도하세요.
+7. 정성적 이유가 필요하면 run_fgi(가상 좌담회)로 누가 왜 망설이는지, 누가 설득되는지 확인하세요.
+8. 개선이 필요해 보이면 suggest_improvements로 개선안을 받고 compare_concepts로 같은 패널에서 재검증하세요.
+9. 타깃에 성별·지역(수도권/비수도권)·1인 가구 조건이 있으면 sex/region/single_only를 쓰세요.
 5. 마지막에 반드시 write_report로 한국어 마크다운 리포트를 제출하세요.
 
 리포트 규칙
@@ -56,6 +65,7 @@ AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 
   실제와의 오차는 check_reliability의 four_rate_mae(약 2%p)·fav_mae(약 3%p) 수준이므로,
   두 조건의 차이가 3%p보다 작으면 "차이가 뚜렷하지 않다"고 쓰고 단정하지 마세요.
 - 연령 표현: '30대'는 30~39세입니다. '20~30대'면 age_min 20, age_max 39.
+- FGI 발언은 소수 참여자의 정성적 의견이므로 수치처럼 일반화하지 마세요.
 - 구성: 요약(결론 2~3줄) / 근거(실행한 실험과 수치) / 타깃·가격·문구 제안 / 신뢰도와 한계 / 다음 단계(실제 조사로 확인할 것)
 - 신뢰도: check_reliability 결과를 근거로, 어느 부분은 믿을 만하고 어느 부분은 조심해야 하는지 쓰세요.
 - 이 결과는 실제 소비자 조사를 대신하지 않는 '앞단 필터'임을 명시하세요."""
@@ -87,7 +97,8 @@ TOOLS = [
             "variants": {"type": "array", "items": {"type": "object", "additionalProperties": False,
                                                     "required": ["label", "name", "description"],
                                                     "properties": {"label": {"type": "string"}, "name": {"type": "string"},
-                                                                   "description": {"type": "string"}}}},
+                                                                   "description": {"type": "string"},
+                                                                   "price": {"type": "integer", "description": "선택. 가격도 바꿀 때"}}}},
             "n": {"type": "integer"}, "age_min": {"type": "integer"}, "age_max": {"type": "integer"}}}}},
     {"type": "function", "function": {
         "name": "get_reasons",
@@ -95,11 +106,34 @@ TOOLS = [
         "parameters": {"type": "object", "additionalProperties": False, "properties": {
             "limit": {"type": "integer", "description": "최대 개수(기본 15)"}}}}},
     {"type": "function", "function": {
+        "name": "run_fgi",
+        "description": "가상 좌담회(FGI). 타깃 패널에서 성별·연령이 섞인 k명(기본 5)이 3라운드 동안 서로의 말을 듣고 이야기한다. "
+                       "핵심 반응·우려·개선 아이디어·입장 변화(설득 장면) 요약을 돌려준다. 비용 약 k×3+1.",
+        "parameters": {"type": "object", "additionalProperties": False, "properties": {
+            "k": {"type": "integer", "description": "참여자 수(4~6)"},
+            "age_min": {"type": "integer"}, "age_max": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "suggest_improvements",
+        "description": "가장 최근 시뮬레이션의 구매·비구매 이유를 근거로 개선 컨셉 2~3안(이름·설명·가격)을 제안한다. 비용 1. "
+                       "결과를 compare_concepts에 넣어 재검증할 수 있다.",
+        "parameters": {"type": "object", "additionalProperties": False, "properties": {
+            "n": {"type": "integer", "description": "개선안 수(2~3)"}}}}},
+    {"type": "function", "function": {
         "name": "write_report",
         "description": "최종 리포트(한국어 마크다운)를 제출하고 작업을 끝낸다.",
         "parameters": {"type": "object", "additionalProperties": False, "required": ["markdown"], "properties": {
             "markdown": {"type": "string"}}}}},
 ]
+
+
+SEGMENT_PROPS = {
+    "sex": {"type": "string", "enum": ["남자", "여자"], "description": "성별 타깃(없으면 생략)"},
+    "region": {"type": "string", "enum": ["수도권", "비수도권"], "description": "지역 타깃(없으면 생략)"},
+    "single_only": {"type": "boolean", "description": "1인 가구만"},
+}
+for _t in TOOLS:
+    if _t["function"]["name"] in ("run_shelf_simulation", "compare_prices", "compare_concepts", "run_fgi"):
+        _t["function"]["parameters"]["properties"].update(SEGMENT_PROPS)
 
 
 def _bootstrap_ci(values: pd.Series, n_boot: int = 1000) -> list:
@@ -117,13 +151,14 @@ class Toolbox:
         self.base_scenario, self.llm, self.seed = scenario, llm, seed
         self.budget_left = budget
         self.pool = load_pool()
-        self.last_df = None
+        self.last_df, self.last_scenario = None, scenario
         self.runs = []
 
     # ---------- 공통 ----------
-    def _panel(self, n, age_min, age_max):
+    def _panel(self, n, age_min, age_max, sex=None, region=None, single_only=False):
         n = max(10, min(int(n or 50), MAX_PANEL))
-        return sample_panel(self.pool, n, self.seed, age_min, age_max)
+        return sample_panel(self.pool, n, self.seed, age_min, age_max, sex=sex, region=region,
+                            single_only=bool(single_only))
 
     def _charge(self, n_calls: int):
         if n_calls > self.budget_left:
@@ -134,7 +169,7 @@ class Toolbox:
         df = run(scenario, panel, self.llm, self.seed, tag="", mode="prob")
         used = self.llm.api_calls - new_before
         self.budget_left -= used
-        self.last_df = df
+        self.last_df, self.last_scenario = df, scenario
         ok = df[df["error"] == ""]
         c = scenario["concept_id"]
         names = {p["id"]: p["name"] for p in scenario["products"]}
@@ -180,24 +215,47 @@ class Toolbox:
         }
 
     def run_shelf_simulation(self, n=60, age_min=None, age_max=None, concept_price=None,
-                             concept_name=None, concept_description=None):
-        panel = self._panel(n, age_min, age_max)
+                             concept_name=None, concept_description=None, **seg):
+        panel = self._panel(n, age_min, age_max, **seg)
         self._charge(len(panel))
         sc = self._scenario_with(concept_price, concept_name, concept_description)
         return self._simulate(sc, panel, f"simulation(age {age_min}~{age_max}, price {concept_price})")
 
-    def compare_prices(self, prices, n=60, age_min=None, age_max=None):
-        panel = self._panel(n, age_min, age_max)
+    def compare_prices(self, prices, n=60, age_min=None, age_max=None, **seg):
+        panel = self._panel(n, age_min, age_max, **seg)
         self._charge(len(panel) * len(prices))
         return {"same_panel": True, "results": [self._simulate(self._scenario_with(price=p), panel, f"price {p}")
                                                 for p in prices]}
 
-    def compare_concepts(self, variants, n=60, age_min=None, age_max=None):
-        panel = self._panel(n, age_min, age_max)
+    def compare_concepts(self, variants, n=60, age_min=None, age_max=None, **seg):
+        panel = self._panel(n, age_min, age_max, **seg)
         self._charge(len(panel) * len(variants))
         return {"same_panel": True, "results": [
-            self._simulate(self._scenario_with(name=v["name"], description=v["description"]), panel, v["label"])
+            self._simulate(self._scenario_with(price=v.get("price"), name=v["name"], description=v["description"]),
+                           panel, v["label"])
             for v in variants]}
+
+    def run_fgi(self, k=5, age_min=None, age_max=None, **seg):
+        k = max(3, min(int(k or 5), 6))
+        self._charge(k * len(FGI_ROUNDS) + 1)
+        before = self.llm.api_calls
+        res = run_fgi(self.llm, self.base_scenario, self._panel(60, age_min, age_max, **seg), k, self.seed)
+        self.budget_left -= self.llm.api_calls - before
+        self.last_fgi = res
+        return {**fgi_compact(res), "budget_left": self.budget_left}
+
+    def suggest_improvements(self, n=3):
+        if self.last_df is None:
+            return {"status": "먼저 시뮬레이션을 실행해야 이유를 근거로 개선안을 만들 수 있다"}
+        self._charge(1)
+        ok = self.last_df[self.last_df["error"] == ""]
+        sc = self.base_scenario  # 원래 컨셉을 기준으로 개선안을 만든다(이유는 가장 최근 실행에서)
+        concept = next(p for p in sc["products"] if p["id"] == sc["concept_id"])
+        before = self.llm.api_calls
+        variants = suggest_improvements(self.llm, concept, ok["reason"].astype(str).tolist(), max(2, min(int(n or 3), 3)))
+        self.budget_left -= self.llm.api_calls - before
+        return {"base": {"name": concept["name"], "price": concept["price"], "description": concept["description"]},
+                "variants": variants, "next": "compare_concepts에 base와 variants를 함께 넣어 같은 패널로 비교하세요."}
 
     def get_reasons(self, limit=15):
         if self.last_df is None:
@@ -219,6 +277,10 @@ def call_tool(tb: Toolbox, name: str, args: dict):
             return tb.compare_concepts(**args)
         if name == "get_reasons":
             return tb.get_reasons(**args)
+        if name == "run_fgi":
+            return tb.run_fgi(**args)
+        if name == "suggest_improvements":
+            return tb.suggest_improvements(**args)
         return {"error": f"알 수 없는 도구: {name}"}
     except Exception as e:  # 도구 오류는 에이전트에게 돌려줘 스스로 대응하게 한다
         return {"error": f"{type(e).__name__}: {e}"}
@@ -230,6 +292,8 @@ def scripted_plan(request: str):
     yield "run_shelf_simulation", {"n": 30, "age_min": 20, "age_max": 39}
     yield "get_reasons", {"limit": 5}
     yield "compare_prices", {"prices": [1700, 1900, 2100], "n": 30, "age_min": 20, "age_max": 39}
+    yield "run_fgi", {"k": 4, "age_min": 20, "age_max": 39}
+    yield "suggest_improvements", {"n": 2}
 
 
 def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 10, model: str | None = None,

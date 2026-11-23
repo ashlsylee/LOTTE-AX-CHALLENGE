@@ -34,15 +34,30 @@ from vm.simulate import load_scenario, run, shares_of  # noqa: E402
 
 # ------------------------------------------------------------------ 디자인
 # 색·글씨 크기는 여기서만 바꾸면 화면 전체에 적용된다. (rem = 본문 글씨 크기 배수, 1rem ≈ 16px)
-RED, RED_DARK, BG, PANEL, BORDER, MUTED = "#E4002B", "#7A0016", "#0A0A0C", "#141418", "rgba(255,255,255,0.08)", "#A1A1AA"
+# 라이트/다크는 브라우저(시스템) 설정 또는 오른쪽 위 ⋮ → Settings → Theme 에서 바뀌고, 포인트 컬러(레드)는 같다.
+RED, RED_DARK = "#E4002B", "#7A0016"
+try:
+    DARK = (st.context.theme.type or "dark") == "dark"
+except Exception:
+    DARK = True
+T = dict(  # 테마별 색
+    bg="#0A0A0C" if DARK else "#F7F7F8", panel="#141418" if DARK else "#FFFFFF",
+    side="#0F0F13" if DARK else "#FFFFFF", border="rgba(255,255,255,0.08)" if DARK else "rgba(0,0,0,0.08)",
+    text="#F4F4F5" if DARK else "#18181B", sub="#D4D4D8" if DARK else "#3F3F46", muted="#A1A1AA" if DARK else "#71717A",
+    card_top="#1A1014" if DARK else "#FFF5F6", hero_end="#141418" if DARK else "#FFFFFF",
+    hero_start="#1A0A0F" if DARK else "#FFE8EC", chip_text="#FCA5B1" if DARK else "#B3001F",
+    grid="#27272A" if DARK else "#E4E4E7", node_fill="#18181B" if DARK else "#FFFFFF",
+    node_line="#3F3F46" if DARK else "#D4D4D8", shadow="none" if DARK else "0 6px 24px rgba(0,0,0,0.06)",
+)
+BG, PANEL, BORDER, MUTED = T["bg"], T["panel"], T["border"], T["muted"]
 CSS = f"""
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
 html, body, [class*="css"], .stMarkdown, .stText, button, input, textarea {{ font-family: 'Noto Sans KR', sans-serif !important; }}
 [data-testid="stAppViewContainer"] {{ background:
-    radial-gradient(1200px 500px at 50% -200px, rgba(228,0,43,0.18), transparent 70%), {BG}; }}
+    radial-gradient(1200px 500px at 50% -200px, rgba(228,0,43,{0.18 if DARK else 0.08}), transparent 70%), {BG}; }}
 [data-testid="stHeader"] {{ background: transparent; }}
-[data-testid="stSidebar"] {{ background: #0F0F13; border-right: 1px solid {BORDER}; }}
+[data-testid="stSidebar"] {{ background: {T["side"]}; border-right: 1px solid {BORDER}; }}
 .block-container {{ padding-top: 2.2rem; max-width: 1200px; }}
 h1 {{ font-size: 1.55rem !important; font-weight: 800 !important; letter-spacing: -0.02em; }}
 h2 {{ font-size: 1.3rem !important; font-weight: 700 !important; letter-spacing: -0.01em; }}
@@ -50,39 +65,51 @@ h3 {{ font-size: 1.12rem !important; font-weight: 700 !important; }}
 h4, h5 {{ font-size: 1.0rem !important; }}
 p, li {{ line-height: 1.7; }}
 /* 히어로 */
-.hero {{ padding: 2.2rem 2.4rem; border-radius: 22px; margin-bottom: 1.4rem; border: 1px solid {BORDER};
-         background: radial-gradient(600px 260px at 15% 0%, rgba(228,0,43,0.35), transparent 70%),
-                     linear-gradient(135deg, #1A0A0F 0%, {PANEL} 60%); }}
+.hero {{ padding: 2.2rem 2.4rem; border-radius: 22px; margin-bottom: 1.4rem; border: 1px solid {BORDER}; box-shadow: {T["shadow"]};
+         background: radial-gradient(600px 260px at 15% 0%, rgba(228,0,43,{0.35 if DARK else 0.14}), transparent 70%),
+                     linear-gradient(135deg, {T["hero_start"]} 0%, {T["hero_end"]} 60%); }}
 .eyebrow {{ color: {RED}; font-weight: 700; letter-spacing: 0.14em; font-size: 0.78rem; text-transform: uppercase; }}
-.hero h1 {{ font-size: 2.1rem !important; margin: 0.35rem 0 0.5rem 0; font-weight: 900 !important; }}
-.hero p {{ color: #D4D4D8; margin: 0; font-size: 1.0rem; }}
+.hero h1 {{ font-size: 2.1rem !important; margin: 0.35rem 0 0.5rem 0; font-weight: 900 !important; color: {T["text"]}; }}
+.hero p {{ color: {T["sub"]}; margin: 0; font-size: 1.0rem; }}
 .chip {{ display:inline-block; padding: 0.22rem 0.7rem; margin: 0.9rem 0.4rem 0 0; border-radius: 999px;
-         border: 1px solid rgba(228,0,43,0.45); color:#FCA5B1; font-size: 0.8rem; background: rgba(228,0,43,0.08); }}
+         border: 1px solid rgba(228,0,43,0.45); color:{T["chip_text"]}; font-size: 0.8rem; background: rgba(228,0,43,0.08); }}
 /* 카드 */
-.card {{ background: linear-gradient(180deg, #1A1014 0%, {PANEL} 100%); border: 1px solid {BORDER};
+.card {{ background: linear-gradient(180deg, {T["card_top"]} 0%, {PANEL} 100%); border: 1px solid {BORDER}; box-shadow: {T["shadow"]};
          border-radius: 18px; padding: 1.2rem 1.3rem; height: 100%; }}
-.card .num {{ font-size: 1.9rem; font-weight: 900; color: #fff; letter-spacing: -0.02em; }}
+.card .num {{ font-size: 1.9rem; font-weight: 900; color: {T["text"]}; letter-spacing: -0.02em; }}
 .card .lbl {{ color: {MUTED}; font-size: 0.85rem; margin-bottom: 0.2rem; }}
-.card .sub {{ color: #FCA5B1; font-size: 0.8rem; margin-top: 0.15rem; }}
-.card h4 {{ margin: 0.2rem 0 0.4rem 0; }}
-.card p {{ color: #C4C4CC; font-size: 0.9rem; margin: 0; }}
+.card .sub {{ color: {T["chip_text"]}; font-size: 0.8rem; margin-top: 0.15rem; }}
+.card h4 {{ margin: 0.2rem 0 0.4rem 0; color: {T["text"]}; }}
+.card p {{ color: {T["sub"]}; font-size: 0.9rem; margin: 0; }}
 .icon {{ width: 42px; height: 42px; border-radius: 50%; display:flex; align-items:center; justify-content:center;
          background: radial-gradient(circle, rgba(228,0,43,0.45), rgba(228,0,43,0.08)); font-size: 1.2rem; margin-bottom: .6rem; }}
 .step {{ border-left: 2px solid {RED}; padding: 0.35rem 0 0.35rem 0.9rem; margin: 0.2rem 0 0.2rem 0.3rem; }}
-.step b {{ color: #fff; }} .step span {{ color: {MUTED}; font-size: 0.85rem; }}
+.step b {{ color: {T["text"]}; }} .step span {{ color: {MUTED}; font-size: 0.85rem; }}
 .section-title {{ font-size: 1.25rem; font-weight: 800; margin: 0.6rem 0 0.2rem 0; }}
 .muted {{ color: {MUTED}; font-size: 0.88rem; }}
+/* FGI 말풍선 */
+.bubble {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 14px; padding: 0.7rem 0.9rem; margin: 0.35rem 0; box-shadow: {T["shadow"]}; }}
+.bubble .who {{ font-weight: 700; font-size: 0.85rem; color: {T["text"]}; }}
+.bubble .txt {{ color: {T["sub"]}; font-size: 0.93rem; margin-top: 0.2rem; }}
+.badge {{ display:inline-block; padding: 0.05rem 0.5rem; border-radius: 999px; font-size: 0.72rem; margin-left: 0.4rem; font-weight: 700; }}
+.b-buy {{ background: {RED}; color: #fff; }} .b-mid {{ background: rgba(228,0,43,0.15); color: {T["chip_text"]}; }}
+.b-no {{ background: {T["grid"]}; color: {T["sub"]}; }}
 /* 탭·버튼·지표 */
 .stTabs [data-baseweb="tab-list"] {{ gap: 0.3rem; border-bottom: 1px solid {BORDER}; }}
 .stTabs [data-baseweb="tab"] {{ padding: 0.6rem 1rem; border-radius: 10px 10px 0 0; font-weight: 600; }}
-.stTabs [aria-selected="true"] {{ background: rgba(228,0,43,0.12); }}
-[data-testid="stBaseButton-primary"], .stButton button[kind="primary"] {{ background: {RED}; border: none; font-weight: 700; border-radius: 10px; }}
+.stTabs [aria-selected="true"] {{ background: rgba(228,0,43,{0.12 if DARK else 0.07}); }}
+[data-testid="stBaseButton-primary"], .stButton button[kind="primary"] {{ background: {RED}; color: #fff; border: none; font-weight: 700; border-radius: 10px; }}
 [data-testid="stMetric"] {{ background: {PANEL}; border: 1px solid {BORDER}; border-radius: 16px; padding: 0.9rem 1rem; }}
 [data-testid="stMetricValue"] {{ font-size: 1.6rem !important; font-weight: 800; }}
 [data-testid="stExpander"] {{ border: 1px solid {BORDER}; border-radius: 14px; }}
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
+
+
+def style_chart(ch):
+    return ch.configure_view(strokeWidth=0).configure_axis(labelColor=T["sub"], titleColor=MUTED, gridColor=T["grid"]
+                                                           ).configure_legend(labelColor=T["sub"])
 
 
 def card(label, value, sub=""):
@@ -97,6 +124,7 @@ def feature(icon, title, text):
 BASE = load_scenario("config/scenario_example.json")
 CONCEPT_ID = BASE["concept_id"]
 TOOL_LABEL = {"check_reliability": "신뢰도 확인", "run_shelf_simulation": "진열대 시뮬레이션",
+              "run_fgi": "가상 FGI(좌담회)", "suggest_improvements": "개선안 제안",
               "compare_prices": "가격 비교 실험", "compare_concepts": "문구 A/B 비교",
               "get_reasons": "구매·비구매 이유 확인", "write_report": "리포트 작성"}
 
@@ -148,11 +176,29 @@ with st.sidebar:
     st.markdown('<div class="eyebrow">Concept Card</div>', unsafe_allow_html=True)
     st.markdown("### 신제품 컨셉")
     c = next(p for p in BASE["products"] if p["id"] == CONCEPT_ID)
-    name = st.text_input("제품명", c["name"])
-    desc = st.text_area("설명·문구", c["description"], height=80)
+    for k, v in {"c_name": c["name"], "c_desc": c["description"], "c_price": c["price"], "c_vol": c["volume_ml"]}.items():
+        st.session_state.setdefault(k, v)
+    with st.expander("✍️ 메모로 컨셉 채우기 (컨셉 정리 에이전트)"):
+        memo = st.text_area("자유 메모", placeholder="예) 20대 여성 타깃, 제주 한라봉 넣은 제로 탄산, 500ml 2000원 정도, 상큼하고 칼로리 걱정 없는 느낌",
+                            height=90, label_visibility="collapsed")
+        if st.button("컨셉 카드로 정리", disabled=not memo):
+            try:
+                from vm.concept import parse_concept
+                card_ = parse_concept(LLM(mock=st.session_state.get("mock_flag", False)), memo,
+                                      st.session_state["c_price"], st.session_state["c_vol"])
+                st.session_state.update({"c_name": card_["name"], "c_desc": card_["description"],
+                                         "c_price": int(card_["price"]), "c_vol": int(card_["volume_ml"]),
+                                         "c_missing": card_["missing"]})
+                st.rerun()
+            except Exception as e:
+                st.error(f"{type(e).__name__}: {e}")
+        if st.session_state.get("c_missing"):
+            st.caption("메모에 없어 기존 값을 유지한 항목: " + ", ".join(st.session_state["c_missing"]))
+    name = st.text_input("제품명", key="c_name")
+    desc = st.text_area("설명·문구", key="c_desc", height=80)
     col1, col2 = st.columns(2)
-    price = col1.number_input("가격(원)", 500, 10000, c["price"], step=100)
-    volume = col2.number_input("용량(ml)", 100, 2000, c["volume_ml"], step=50)
+    price = col1.number_input("가격(원)", 500, 10000, step=100, key="c_price")
+    volume = col2.number_input("용량(ml)", 100, 2000, step=50, key="c_vol")
     st.markdown("### 타깃 패널")
     age = st.slider("연령(만)", 19, 80, (20, 39))
     sex = st.radio("성별", ["전체", "남자", "여자"], horizontal=True)
@@ -162,6 +208,7 @@ with st.sidebar:
                                           for p in BASE["products"] if p["id"] != CONCEPT_ID))
     st.divider()
     mock = st.toggle("API 없이 시험(mock)", value=False, help="가짜 응답으로 화면과 흐름만 확인합니다. 수치는 의미 없음.")
+    st.session_state["mock_flag"] = mock
     if APP_PASSWORD and not mock:
         pw = st.text_input("실행 비밀번호", type="password", help="공개 데모에서는 저장된 결과만 볼 수 있습니다.")
         st.session_state["pw_ok"] = (pw == APP_PASSWORD)
@@ -178,7 +225,8 @@ st.markdown(f"""
   <span class="chip">AI 에이전트 자동 실험·리포트</span><span class="chip">실제 조사 앞단 필터</span>
 </div>""", unsafe_allow_html=True)
 
-tabs = st.tabs(["① 컨셉 검증 · AI 에이전트", "② 진열대 시뮬레이션", "③ 신뢰도 검증", "④ 서비스 구조·운영", "⑤ 한계와 로드맵"])
+tabs = st.tabs(["① 컨셉 검증 · AI 에이전트", "② 진열대 시뮬레이션", "③ 가상 FGI", "④ 신뢰도 검증",
+                "⑤ 서비스 구조·운영", "⑥ 한계와 로드맵"])
 
 # ------------------------------------------------------------------ ① 에이전트
 with tabs[0]:
@@ -251,6 +299,8 @@ with tabs[1]:
             with st.spinner(f"{n}명에게 묻는 중…"):
                 df = run(scenario, panel, llm, 42, mode="prob")
             st.session_state["sim"] = (df, scenario, llm.api_calls)
+            st.session_state["sim_panel"] = panel
+            st.session_state.pop("improve", None)
         except Exception as e:
             st.error(f"{type(e).__name__}: {e}")
     if "sim" in st.session_state:
@@ -272,10 +322,9 @@ with tabs[1]:
         chart = alt.Chart(bars).mark_bar(cornerRadiusEnd=6, height=26).encode(
             x=alt.X("비율:Q", title="구매 비율(%)"), y=alt.Y("제품:N", sort="-x", title=None),
             color=alt.Color("구분:N", scale=alt.Scale(domain=["신제품", "경쟁 제품", "구매 안 함"],
-                                                     range=[RED, "#52525B", "#27272A"]), legend=None),
+                                                     range=[RED, "#71717A", T["grid"]]), legend=None),
             tooltip=["제품", "비율"]).properties(height=230)
-        st.altair_chart(chart.configure_view(strokeWidth=0).configure_axis(labelColor="#D4D4D8", titleColor=MUTED,
-                                                                            gridColor="#27272A"), width="stretch")
+        st.altair_chart(style_chart(chart), width="stretch")
         st.markdown("**연령대별 신제품 구매 비율(%)**")
         st.dataframe(ok.groupby("age_group", observed=True)[f"p_{CONCEPT_ID}"].mean().mul(100).round(1)
                      .rename("구매 비율(%)").to_frame().T, hide_index=True)
@@ -284,8 +333,111 @@ with tabs[1]:
                 st.markdown(f"- **{r.age_group} {r.sex}** · {r.reason}")
         st.caption(f"응답 {len(ok)}/{len(df)}명 · 새 API 호출 {calls}회")
 
-# ------------------------------------------------------------------ ③ 신뢰도
+        # ---- 개선 컨셉 루프: 이유 → 개선안 → 같은 패널로 재검증 (기획서 4)
+        st.markdown("---")
+        st.markdown('<div class="section-title">개선 컨셉 루프</div>', unsafe_allow_html=True)
+        st.markdown('<p class="muted">위 구매·비구매 이유만 근거로 개선안을 만들고, 같은 패널에서 원안과 나란히 다시 검증합니다.</p>',
+                    unsafe_allow_html=True)
+        i1, i2 = st.columns(2)
+        if i1.button("① 개선안 받기", disabled=not can_run(mock)):
+            from vm.concept import suggest_improvements
+            concept = next(p for p in sc["products"] if p["id"] == CONCEPT_ID)
+            with st.spinner("개선안 만드는 중…"):
+                st.session_state["improve"] = {"variants": suggest_improvements(LLM(mock=mock), concept,
+                                                                               ok["reason"].astype(str).tolist(), 3)}
+        imp = st.session_state.get("improve")
+        if imp:
+            vc = st.columns(len(imp["variants"]))
+            for col, v in zip(vc, imp["variants"]):
+                col.markdown(feature("💡", f"{v['label']} · {v['name']}",
+                                     f"{v['description']}<br><b>{v['price']:,}원</b><br><span class='muted'>근거: {v['rationale']}</span>"),
+                             unsafe_allow_html=True)
+            if i2.button("② 같은 패널로 재검증", type="primary", disabled=not can_run(mock)):
+                rows, llm2 = [], LLM(mock=mock)
+                cands = [{"label": "원안", "name": name, "description": desc, "price": price}] + imp["variants"]
+                with st.spinner(f"{len(cands)}개 안 × {len(st.session_state['sim_panel'])}명 검증 중…"):
+                    for v in cands:
+                        sc2 = scenario_with(v["name"], v["description"], v["price"], volume)
+                        d2 = run(sc2, st.session_state["sim_panel"], llm2, 42, mode="prob")
+                        o2 = d2[d2["error"] == ""]
+                        rows.append({"안": f"{v['label']} · {v['name']}", "구매 비율(%)": round(o2[f"p_{CONCEPT_ID}"].mean() * 100, 1),
+                                     "사 볼 의향(%)": round(o2[f"try_{CONCEPT_ID}"].mean() * 100, 1),
+                                     "지불의사(원)": int(o2[f"max_price_{CONCEPT_ID}"].median()), "가격(원)": v["price"]})
+                imp["result"] = pd.DataFrame(rows)
+            if "result" in imp:
+                r = imp["result"]
+                ch = alt.Chart(r).mark_bar(cornerRadiusEnd=6, height=24).encode(
+                    x=alt.X("구매 비율(%):Q"), y=alt.Y("안:N", sort="-x", title=None),
+                    color=alt.condition(alt.datum.안 == r.iloc[0]["안"], alt.value("#A1A1AA"), alt.value(RED)),
+                    tooltip=list(r.columns)).properties(height=40 * len(r) + 20)
+                st.altair_chart(style_chart(ch), width="stretch")
+                st.dataframe(r, hide_index=True, width="stretch")
+                st.caption("차이가 3%p 미만이면 뚜렷한 차이로 보지 않습니다(③ 신뢰도 검증의 실제 대비 오차 수준).")
+
+# ------------------------------------------------------------------ ③ 가상 FGI
 with tabs[2]:
+    st.markdown('<div class="section-title">가상 FGI (좌담회)</div>', unsafe_allow_html=True)
+    st.markdown('<p class="muted">타깃 패널에서 성별·연령이 섞인 참여자들이 3라운드 동안 서로의 말을 듣고 이야기합니다. '
+                '라운드마다 질문을 바꾸고(첫인상 → 걸리는 점 → 무엇이 바뀌면 살지), 매 라운드 구매 입장을 기록해 '
+                '<b>누가 누구에게 설득되는지</b> 추적합니다. 소수 의견이므로 수치처럼 일반화하지 않습니다.</p>', unsafe_allow_html=True)
+    k = st.slider("참여자 수", 3, 6, 5)
+    if st.button("좌담회 시작", type="primary", disabled=not can_run(mock)):
+        from vm.fgi import run_fgi
+        try:
+            fp = sample_panel(pool(), 60, 42, age[0], age[1], **seg)
+            with st.spinner(f"{k}명 × 3라운드 진행 중… (약 {k * 3 + 1}회 호출)"):
+                fres = run_fgi(LLM(mock=mock), scenario, fp, k)
+            out = OUT_DIR / f"fgi_{pd.Timestamp.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "fgi.json").write_text(json.dumps({"concept": name, "price": price, **fres}, ensure_ascii=False, indent=1),
+                                          encoding="utf-8")
+            st.session_state["fgi"] = fres
+        except Exception as e:
+            st.error(f"{type(e).__name__}: {e}")
+    saved = sorted(glob.glob(str(OUT_DIR / "fgi_*" / "fgi.json")), reverse=True)
+    if saved:
+        with st.expander("저장된 좌담회 보기"):
+            def _fl(f):
+                d = json.loads(Path(f).read_text(encoding="utf-8"))
+                stamp = Path(f).parent.name.replace("fgi_", "")
+                return f"{stamp[4:6]}/{stamp[6:8]} {stamp[9:11]}:{stamp[11:13]} · {d.get('concept', '')} {d.get('price', 0):,}원"
+            pickf = st.selectbox("이전 좌담회", saved, format_func=_fl)
+            if st.button("불러오기", key="load_fgi"):
+                st.session_state["fgi"] = json.loads(Path(pickf).read_text(encoding="utf-8"))
+    fres = st.session_state.get("fgi")
+    if fres:
+        BADGE = {"살 것": "b-buy", "고민": "b-mid", "안 살 것": "b-no"}
+        fs = fres["final_stance"]
+        k1, k2, k3 = st.columns(3)
+        k1.markdown(card("최종: 살 것", f"{fs.get('살 것', 0)}명"), unsafe_allow_html=True)
+        k2.markdown(card("최종: 고민", f"{fs.get('고민', 0)}명"), unsafe_allow_html=True)
+        k3.markdown(card("최종: 안 살 것", f"{fs.get('안 살 것', 0)}명",
+                         f"입장 바뀐 사람 {len(fres['stance_changed'])}명"), unsafe_allow_html=True)
+        st.write("")
+        left, right = st.columns([3, 2])
+        with left:
+            from vm.fgi import ROUNDS
+            for rnd, q in enumerate(ROUNDS, 1):
+                st.markdown(f"**{rnd}라운드 · {q}**")
+                for t in [t for t in fres["turns"] if t["round"] == rnd]:
+                    to = f" → {t['reply_to']}" if t.get("reply_to") else ""
+                    st.markdown(f'<div class="bubble"><div class="who">{t["speaker"]}{to}'
+                                f'<span class="badge {BADGE.get(t["stance"], "b-mid")}">{t["stance"]}</span></div>'
+                                f'<div class="txt">{t["utterance"]}</div></div>', unsafe_allow_html=True)
+        with right:
+            sm = fres["summary"]
+            for title, key_, icon in [("핵심 반응", "key_points", "🗣"), ("우려", "concerns", "⚠️"),
+                                      ("개선 아이디어", "improvements", "💡"), ("설득 장면", "persuasion", "🔁")]:
+                st.markdown(feature(icon, title, "<br>".join(f"· {x}" for x in sm.get(key_, [])) or "-"),
+                            unsafe_allow_html=True)
+                st.write("")
+            tt = pd.DataFrame(fres["turns"]).pivot(index="speaker", columns="round", values="stance")
+            tt.columns = [f"{c}R" for c in tt.columns]
+            st.markdown("**라운드별 입장 변화**")
+            st.dataframe(tt, width="stretch")
+
+# ------------------------------------------------------------------ ④ 신뢰도
+with tabs[3]:
     st.markdown('<div class="section-title">이 패널을 어디까지 믿을 수 있나</div>', unsafe_allow_html=True)
     st.markdown('<p class="muted">공개된 실제 정부 설문(한국농촌경제연구원 식품소비행태조사 2023~2025, 성인 약 1.7만 명)과 '
                 '같은 질문을 페르소나에게 묻고 비교했습니다. 평가 규칙은 실행 전에 정해 두었습니다.</p>', unsafe_allow_html=True)
@@ -310,13 +462,12 @@ with tabs[2]:
         line = alt.Chart(long).mark_line(point=alt.OverlayMarkDef(size=70), strokeWidth=3).encode(
             x=alt.X("연령:N", sort=ages, title=None, axis=alt.Axis(labelAngle=0)), y=alt.Y("비율:Q", title="탄산·이온 음료 1순위 비율(%)"),
             color=alt.Color("구분:N", scale=alt.Scale(domain=[l for _, l in rows],
-                                                     range=["#F4F4F5", RED, "#71717A"][:len(rows)]),
-                            legend=alt.Legend(orient="top", title=None, labelColor="#D4D4D8")),
+                                                     range=[T["text"], RED, "#A1A1AA"][:len(rows)]),
+                            legend=alt.Legend(orient="top", title=None)),
             strokeDash=alt.condition(alt.datum.구분 == "기본 방식", alt.value([5, 4]), alt.value([0])),
             tooltip=["연령", "구분", "비율"]).properties(height=320)
         st.write("")
-        st.altair_chart(line.configure_view(strokeWidth=0).configure_axis(labelColor="#D4D4D8", titleColor=MUTED,
-                                                                           gridColor="#27272A"), width="stretch")
+        st.altair_chart(style_chart(line), width="stretch")
         c1, c2 = st.columns(2)
         c1.markdown(feature("🎯", "무엇을 발견했나",
                             "한 사람에게 답 하나를 받으면 '가장 그럴듯한 답'으로 쏠려 커피·녹차가 과다하고 우유류는 0명이었습니다. "
@@ -328,33 +479,34 @@ with tabs[2]:
             st.dataframe(t)
         st.caption(f"결과 파일: {f}")
 
-# ------------------------------------------------------------------ ④ 서비스 구조
-with tabs[3]:
+# ------------------------------------------------------------------ ⑤ 서비스 구조
+with tabs[4]:
     st.markdown('<div class="section-title">서비스 아키텍처</div>', unsafe_allow_html=True)
     st.graphviz_chart(f"""
 digraph G {{
   rankdir=LR; bgcolor="transparent"; nodesep=0.35; ranksep=0.5;
-  node [shape=box style="rounded,filled" fontname="Noto Sans KR" fontsize=13 color="#3F3F46" fillcolor="#18181B" fontcolor="#F4F4F5"];
+  node [shape=box style="rounded,filled" fontname="Noto Sans KR" fontsize=13 color="{T['node_line']}" fillcolor="{T['node_fill']}" fontcolor="{T['text']}"];
   edge [color="#71717A" fontname="Noto Sans KR" fontsize=9 fontcolor="#A1A1AA"];
-  user [label="마케터\\n컨셉·질문 입력" fillcolor="{RED_DARK}" color="{RED}"];
-  agent [label="시장 검증 에이전트\\n계획 · 도구 선택 · 리포트" fillcolor="#2A0A12" color="{RED}"];
+  user [label="마케터\\n컨셉·질문 입력" fillcolor="{RED}" color="{RED}" fontcolor="#FFFFFF"];
+  agent [label="시장 검증 에이전트\\n계획 · 도구 선택 · 리포트" fillcolor="{RED_DARK if DARK else '#FFE8EC'}" color="{RED}"];
   subgraph cluster_tools {{ label="도구" fontcolor="#A1A1AA" color="#27272A" style="rounded";
-    tools [label="진열대 시뮬레이션\\n가격 비교 · 문구 A/B\\n이유 분석"]; rel [label="신뢰도 확인"]; }}
+    tools [label="진열대 시뮬레이션 · 가격 비교\\n문구 A/B · 가상 FGI\\n개선안 제안 · 이유 분석"]; rel [label="신뢰도 확인"]; }}
+  parse [label="컨셉 정리\\n메모 → 컨셉 카드"];
   engine [label="페르소나 시뮬레이션 엔진\\n100명 분포 응답 · 블라인드 진열"];
   llm [label="LLM\\n(사내 모델로 교체 가능)"]; cache [label="응답 캐시 · 실행 기록\\n재현성 · 비용 절감"];
   subgraph cluster_data {{ label="데이터" fontcolor="#A1A1AA" color="#27272A" style="rounded";
     persona [label="합성 페르소나 풀\\nNemotron-Personas-Korea"]; krei [label="실제 설문\\nKREI 식품소비행태조사"];
     lotte [label="롯데칠성 판매·조사\\n(연결 예정)" style="rounded,dashed" fontcolor="#A1A1AA"]; }}
-  report [label="리포트\\n수치 · 신뢰도 · 한계" fillcolor="{RED_DARK}" color="{RED}"];
-  user -> agent -> tools -> engine -> llm -> cache;
+  report [label="리포트\\n수치 · 신뢰도 · 한계" fillcolor="{RED}" color="{RED}" fontcolor="#FFFFFF"];
+  user -> parse -> agent -> tools -> engine -> llm -> cache;
   agent -> rel; persona -> engine; krei -> rel; lotte -> rel [style=dashed label="보정"];
   agent -> report;
 }}""", width="stretch")
     st.markdown('<div class="section-title">운영 프로세스</div>', unsafe_allow_html=True)
     steps = [("1", "📝", "컨셉 입력", "제품명·맛·가격·문구를 컨셉 카드로 입력"),
              ("2", "👥", "타깃 패널", "연령·성별·지역·가구로 패널 구성"),
-             ("3", "🤖", "에이전트 실험", "시뮬레이션·가격·문구 비교를 자동 실행"),
-             ("4", "📊", "리포트·신뢰도", "수치와 함께 '어디까지 믿을지' 확인"),
+             ("3", "🤖", "에이전트 실험", "시뮬레이션·가격·문구 비교·가상 FGI를 자동 실행"),
+             ("4", "📊", "리포트·개선 루프", "수치·신뢰도 확인 후 개선안을 같은 패널로 재검증"),
              ("5", "✅", "상위안만 실제 조사", "걸러진 1~2안만 FGI·설문으로"),
              ("6", "🔁", "결과로 보정", "실제 조사 결과를 다시 검증 데이터로")]
     for row in (steps[:3], steps[3:]):
@@ -373,8 +525,8 @@ digraph G {{
     u[1].markdown(feature("🔄", "자사 제품 잠식 확인", "진열대에 자사 기존 제품을 함께 두고 신제품이 어디서 점유를 가져오는지 확인"), unsafe_allow_html=True)
     u[2].markdown(feature("🧓", "모으기 어려운 집단", "FGI로 모으기 어려운 고령층·지방 거주자 반응을 미리 점검"), unsafe_allow_html=True)
 
-# ------------------------------------------------------------------ ⑤ 한계
-with tabs[4]:
+# ------------------------------------------------------------------ ⑥ 한계
+with tabs[5]:
     st.markdown('<div class="section-title">한계와 로드맵</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     c1.markdown(feature("✅", "지금 알 수 있는 것",
