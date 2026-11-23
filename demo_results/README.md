@@ -12,10 +12,3 @@
 | `projects/<id>/` | `project.json` | ⓪ 프로젝트 |
 
 올리지 말 것: `llm_cache.jsonl`, `.env`, `_mock`이 붙은 폴더, 개인정보가 담긴 원본 데이터.
-
-## 지금 들어 있는 결과
-
-- `survey_20261122_220905/`: 설문 재현(KREI) 연령대당 30명, seed 42. `responses_base.csv`·`meta.json`은 실행 원본.
-  `comparison.csv`는 같은 실행을 읽은 에이전트 기록(`agent_20261123_144927/trace.json`의 check_reliability 결과표)에서 옮긴 값이며,
-  base 행은 `responses_base.csv`로 다시 계산해 같은 값(fav_mae 8.37, four_rate_mae 12.76 등)임을 확인함. prob(argmax) 행은 없음.
-- `agent_20261123_144927/`: 가격 대조실험(1,900 / 2,200 / 2,500원, 20~45세 각 50명) 에이전트 실행.
