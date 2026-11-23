@@ -54,9 +54,15 @@ def load_pool() -> pd.DataFrame:
 
 def sample_panel(pool: pd.DataFrame, n: int, seed: int = 42,
                  age_min: int | None = None, age_max: int | None = None,
-                 sex: str | None = None) -> pd.DataFrame:
-    """타깃 조건으로 거른 뒤 무작위 추출. 같은 seed면 같은 패널(대조실험용)."""
+                 sex: str | None = None, single_only: bool = False,
+                 region: str | None = None) -> pd.DataFrame:
+    """타깃 조건으로 거른 뒤 무작위 추출. 같은 seed면 같은 패널(대조실험용).
+    single_only: 1인 가구만, region: '수도권' 또는 '비수도권'."""
     df = pool
+    if single_only:
+        df = df[df["family_type"].astype(str).str.contains("혼자")]
+    if region:
+        df = df[df["is_capital"] == region]
     if age_min is not None:
         df = df[df["age"] >= age_min]
     if age_max is not None:
