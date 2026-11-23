@@ -160,7 +160,24 @@ def card(label, value, sub=""):
 def bold(text: str) -> str:
     """**굵게**를 <strong>으로 바꾼다. 마크다운은 '**16.8%**였고'처럼 닫는 ** 앞이 문장부호이고
     뒤에 글자가 붙으면 굵게로 인식하지 못해 **가 그대로 보이기 때문(한국어 조사에서 자주 발생)."""
-    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", str(text or ""))
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", str(text or ""))
+    # '20~45세 … 10.0~10.2%'처럼 ~가 두 번 나오면 마크다운이 사이를 취소선으로 처리하므로 일반 문자로 바꾼다
+    return text.replace("~", "&#126;")
+
+
+def cond_label(c: dict) -> str:
+    seg_txt = " · ".join(x for x in [c.get("sex"), c.get("region"), "1인 가구" if c.get("single") else None] if x)
+    return f"{c['name']} · {c['price']:,}원 · {c['age'][0]}~{c['age'][1]}세" + (f" · {seg_txt}" if seg_txt else "")
+
+
+def show_cond(saved: dict | None, current: dict):
+    """결과가 어떤 조건에서 나왔는지 보여주고, 왼쪽 입력이 바뀌었으면 다시 실행하라고 알린다."""
+    if not saved:
+        return
+    st.markdown(f'<p class="muted">이 결과의 조건 · <b>{cond_label(saved)}</b></p>', unsafe_allow_html=True)
+    if saved != current:
+        st.warning(f"왼쪽 입력이 바뀌었어요. 지금 보이는 결과는 이전 조건({saved['name']} · {saved['price']:,}원) 결과예요. "
+                   "새 조건으로 보려면 다시 실행하세요.", icon="⚠️")
 
 
 def grid(items, n=None):
@@ -301,6 +318,9 @@ with st.sidebar:
         if not st.session_state["pw_ok"]:
             st.caption("🔒 실행하려면 비밀번호 또는 본인 API 키가 필요합니다. 저장된 결과는 그대로 볼 수 있어요.")
     scenario = scenario_with(name, desc, price, volume, competitors)
+    COND = {"name": name, "price": int(price), "desc": desc, "volume": int(volume), "age": list(age),
+            "sex": None if sex == "전체" else sex, "region": None if region == "전체" else region, "single": single,
+            "shelf": [(p["name"], p["price"]) for p in competitors]}
     seg = {"sex": None if sex == "전체" else sex, "region": None if region == "전체" else region, "single_only": single}
 
 # ------------------------------------------------------------------ 히어로
@@ -348,7 +368,7 @@ with tabs[0]:
             try:
                 res = run_agent(question, scenario, budget=int(budget), mock=mock, on_step=on_step, api_key=USER_KEY)
                 status.update(label=f"완료 · 새 페르소나 응답 {res['api_calls']}개 (예산 {res['budget']})", state="complete")
-                st.session_state["agent_result"] = res
+                st.session_state["agent_result"] = {**res, "cond": dict(COND)}
             except Exception as e:
                 status.update(label="실패", state="error")
                 st.error(f"{type(e).__name__}: {e}")
@@ -367,6 +387,7 @@ with tabs[0]:
 
     res = st.session_state.get("agent_result")
     if res:
+        show_cond(res.get("cond"), COND)
         st.markdown("---")
         with st.container(border=True):
             st.markdown(bold(res["report"]) or "(리포트 없음)", unsafe_allow_html=True)
@@ -389,11 +410,13 @@ with tabs[1]:
             with st.spinner(f"{n}명에게 묻는 중…"):
                 df = run(scenario, panel, llm, 42, mode="prob")
             st.session_state["sim"] = (df, scenario, llm.api_calls)
+            st.session_state["sim_cond"] = dict(COND)
             st.session_state["sim_panel"] = panel
             st.session_state.pop("improve", None)
         except Exception as e:
             st.error(f"{type(e).__name__}: {e}")
     if "sim" in st.session_state:
+        show_cond(st.session_state.get("sim_cond"), COND)
         df, sc, calls = st.session_state["sim"]
         ok = df[df["error"] == ""]
         names = {p["id"]: p["name"] for p in sc["products"]} | {"NONE": "구매 안 함"}
@@ -476,9 +499,9 @@ with tabs[2]:
                 fres = run_fgi(LLM(mock=mock, api_key=USER_KEY), scenario, fp, k)
             out = OUT_DIR / f"fgi_{pd.Timestamp.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
             out.mkdir(parents=True, exist_ok=True)
-            (out / "fgi.json").write_text(json.dumps({"concept": name, "price": price, **fres}, ensure_ascii=False, indent=1),
+            (out / "fgi.json").write_text(json.dumps({"concept": name, "price": price, "cond": COND, **fres}, ensure_ascii=False, indent=1),
                                           encoding="utf-8")
-            st.session_state["fgi"] = fres
+            st.session_state["fgi"] = {**fres, "cond": dict(COND)}
         except Exception as e:
             st.error(f"{type(e).__name__}: {e}")
     saved = sorted(glob.glob(str(OUT_DIR / "fgi_*" / "fgi.json")), reverse=True)
@@ -493,6 +516,7 @@ with tabs[2]:
                 st.session_state["fgi"] = json.loads(Path(pickf).read_text(encoding="utf-8"))
     fres = st.session_state.get("fgi")
     if fres:
+        show_cond(fres.get("cond"), COND)
         BADGE = {"살 것": "b-buy", "고민": "b-mid", "안 살 것": "b-no"}
         fs = fres["final_stance"]
         grid([card("최종: 살 것", f"{fs.get('살 것', 0)}명"), card("최종: 고민", f"{fs.get('고민', 0)}명"),
