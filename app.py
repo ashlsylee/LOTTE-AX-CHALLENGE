@@ -257,6 +257,8 @@ with st.sidebar:
     c = next(p for p in BASE["products"] if p["id"] == CONCEPT_ID)
     for k, v in {"c_name": c["name"], "c_desc": c["description"], "c_price": c["price"], "c_vol": c["volume_ml"]}.items():
         st.session_state.setdefault(k, v)
+    if "pending_card" in st.session_state:  # ① 탭에서 '요청 문장으로 카드 바꾸기'를 누른 경우
+        st.session_state.update(st.session_state.pop("pending_card"))
     with st.expander("✍️ 메모로 컨셉 채우기 (컨셉 정리 에이전트)"):
         memo = st.text_area("자유 메모", placeholder="예) 20대 여성 타깃, 제주 한라봉 넣은 제로 탄산, 500ml 2000원 정도, 상큼하고 칼로리 걱정 없는 느낌",
                             height=90, label_visibility="collapsed")
@@ -343,8 +345,26 @@ with tabs[0]:
     st.markdown('<div class="section-title">시장 검증 에이전트</div>', unsafe_allow_html=True)
     st.markdown('<p class="muted">질문을 받으면 에이전트가 스스로 계획 → 도구 실행 → 결과 확인 → 추가 실험 → 리포트 작성까지 진행합니다.</p>',
                 unsafe_allow_html=True)
+    st.markdown(f'<p class="muted">검증할 컨셉(왼쪽 카드) · <b>{cond_label(COND)}</b> — 실행은 항상 이 카드 기준입니다.</p>',
+                unsafe_allow_html=True)
     default_q = f"{age[0]}~{age[1]}세 대상 '{name}', {price:,}원이 적당한지 검토해줘"
     question = st.text_area("요청", default_q, height=70)
+    # 요청 문장에 다른 제품·가격을 쓰면 왼쪽 카드와 어긋난다 → 알려주고, 한 번에 카드를 맞출 수 있게 한다
+    prices_in_q = {int(x.replace(",", "")) for x in re.findall(r"(\d{1,2},?\d{3})\s*원", question)}
+    if (name not in question) or (prices_in_q and int(price) not in prices_in_q):
+        st.warning("요청 문장의 제품명이나 가격이 왼쪽 컨셉 카드와 달라요. 실행은 왼쪽 카드 기준으로 되므로 결과가 섞일 수 있어요.",
+                   icon="⚠️")
+        if st.button("요청 문장 내용으로 왼쪽 카드 바꾸기", disabled=not can_run(mock)):
+            from vm.concept import parse_concept
+            try:
+                card_ = parse_concept(LLM(mock=mock, api_key=USER_KEY), question, int(price), int(volume))
+                upd = {"c_name": card_["name"], "c_price": int(card_["price"]), "c_vol": int(card_["volume_ml"])}
+                if "설명" not in " ".join(card_.get("missing", [])) and card_.get("description"):
+                    upd["c_desc"] = card_["description"]
+                st.session_state["pending_card"] = upd  # 사이드바 입력칸은 이미 그려졌으므로 다음 실행 시작 때 반영
+                st.rerun()
+            except Exception as e:
+                st.error(f"{type(e).__name__}: {e}")
     cb1, cb2 = st.columns([1, 3])
     budget = cb1.number_input("예산(페르소나 호출 수)", 50, 600, 150, step=50)
     cb2.caption("예산 = 이번 실행에서 새로 물어볼 수 있는 페르소나 응답 수(= API 호출 수). 이미 물어본 응답은 캐시로 재사용합니다.")

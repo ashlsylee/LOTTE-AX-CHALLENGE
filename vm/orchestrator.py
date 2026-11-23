@@ -319,7 +319,9 @@ def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 
         from openai import OpenAI
         client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
         agent_model = agent_model or os.getenv("VM_AGENT_MODEL") or llm.model
-        context = (f"[요청]\n{request}\n\n[기본 시나리오]\n{json.dumps(scenario, ensure_ascii=False)}\n\n"
+        context = (f"[요청]\n{request}\n\n[기본 시나리오]\n{json.dumps(scenario, ensure_ascii=False)}\n"
+                   "※ 검증 대상은 기본 시나리오의 신제품(concept_id)입니다. 요청 문장의 제품명·가격이 시나리오와 다르면 "
+                   "리포트 맨 앞에 그 차이를 밝히고, 시나리오 기준으로 진행하세요.\n\n"
                    f"[예산] 페르소나 호출 {budget}회, 최대 {max_steps}단계")
         messages = [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": context}]
         for step in range(1, max_steps + 1):
