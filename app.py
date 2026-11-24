@@ -15,11 +15,11 @@ from vm.personas import load_pool
 from vm.simulate import load_scenario
 from vm.ui import (
     agent_design_page, cards, example_results, hero, introduction,
-    limits_page, show_fgi, show_shelf,
+    limits_page, reliability_page, show_fgi, show_shelf, show_validation,
 )
-from vm.workflow import BOARDS, evaluate, evidence, official_trend, save_report
+from vm.workflow import BOARDS, INTENT_GAP, evaluate, evidence, official_trend, save_report, validate_concepts
 
-PAGES = ["신제품 검토", "과거 자료 관리", "검토 이력", "에이전트 설계", "한계와 로드맵"]
+PAGES = ["신제품 검토", "AI 에이전트", "신뢰도 검증", "과거 자료 관리", "검토 이력", "한계와 로드맵"]
 BASE = load_scenario("config/scenario_example.json")
 PRODUCT_ID = BASE["concept_id"]
 DEFAULTS = dict(name="",desc="",price=1800,volume=250,channel="편의점",
@@ -61,12 +61,8 @@ def scenario_for(cfg):
 def review_page(mock, api_key):
     st.header("새 음료 아이디어를 검토하세요")
     introduction()
-    example_results()
-    cards([
-        ("쥬시모먼트","비가열 HPP 프리미엄 주스 · 300mL · 3,000원"),
-        ("레쓰비 프리즈","얼려 먹는 슬러시형 커피 · 170mL · 1,800원"),
-        ("밀키스 화채","수박화채맛 시즌 탄산 · 캔 250mL / PET 500mL"),
-    ])
+    if not BOARDS:
+        st.caption("컨셉보드 예시는 로컬 `data/challenge/boards.json`에 두면 아래 '컨셉 시작점'에 나타납니다(저장소에는 올리지 않음).")
     template = st.selectbox("컨셉 시작점", ["직접 작성",*BOARDS,"제주 청귤 제로 스파클링 · 시연용"], key="review_template")
     pending = st.session_state.pop("history_config",None)
     generation = st.session_state.get("review_generation",0)
@@ -98,6 +94,7 @@ def review_page(mock, api_key):
             size = st.radio("평가 규모",[50,150], index=1 if defaults["n"]==150 else 0,
                             format_func=lambda n:f"{'빠른 검토' if n==50 else '비교 검토'} · {n}명",horizontal=True)
             price_b = st.number_input("B안 가격(원) · 0이면 단일안 평가",min_value=0,value=defaults["price_b"],step=100)
+            with_fgi = st.checkbox("가상 좌담회 5명 포함 (API 호출 약 16회 추가)",value=bool(defaults.get("fgi",False)))
             occasion = st.text_input("구매 상황",defaults["occasion"])
             competitor_table = pd.DataFrame([{"제품명":p["name"],"가격(원)":p["price"],"용량(mL)":p["volume_ml"],"설명":p["description"]}
                                              for p in competitors],columns=["제품명","가격(원)","용량(mL)","설명"])
@@ -122,7 +119,8 @@ def review_page(mock, api_key):
                                             price=int(row["가격(원)"]),volume_ml=int(row["용량(mL)"]) if pd.notna(row["용량(mL)"]) else 500,
                                             description=str(row["설명"]) if pd.notna(row["설명"]) else ""))
         cfg = dict(name=name.strip(),desc=description.strip(),price=price,volume=volume,channel=channel.strip(),
-                   age=target,n=size,price_b=price_b,occasion=occasion.strip(),competitors=edited_products)
+                   age=target,n=size,price_b=price_b,occasion=occasion.strip(),competitors=edited_products,
+                   fgi=with_fgi)
         data = datasets.current()
         source,count = evidence(cfg["name"],cfg["desc"],data,cfg["channel"])
         if trend_file:
@@ -144,7 +142,7 @@ def review_page(mock, api_key):
     start = st.button("이 근거로 평가 시작",type="primary",disabled=not can_run(mock)) if "report" not in review and not complete else False
     if start or complete:
         try:
-            with st.spinner("정량 선택 평가와 5명 좌담회를 진행 중입니다."):
+            with st.spinner("가상 진열대 평가"+(" · 5명 좌담회" if cfg.get("fgi") else "")+"를 진행 중입니다."):
                 visual = {}
                 report,n_ok,share = evaluate(cfg,review["scenario"],review["evidence"],pool(),
                                              LLM(mock=mock,api_key=api_key),mock,review["data"],visual=visual)
@@ -153,27 +151,34 @@ def review_page(mock, api_key):
             st.error(f"평가를 완료하지 못했습니다. {exc}")
     if "report" not in review:
         return
-    details,_,feedback = review["report"].partition("## 종합 피드백")
+    visual = review.get("visual",{})
+    sections = visual.get("sections",{})
     st.subheader("검토 결과와 다음 단계")
     if review["mock"]:
         st.caption("모의 실행 · 수치와 발언은 동작 확인용입니다.")
-    st.metric("가상 진열대 신제품 선택",f"{review['concept_share']:.1f}%",help=f"유효 응답 {review['n_ok']}명")
-    st.markdown(feedback.split("## 검토 판단",1)[0].strip())
-    visual = review.get("visual",{})
+    left,right = st.columns(2)
+    left.metric("가상 진열대 신제품 선택",f"{review['concept_share']:.1f}%",help=f"유효 응답 {review['n_ok']}명")
+    check = visual.get("validation")
+    if check:
+        right.metric("설문 구매의향과 차이",f"{check['차이(%p)']:+.1f}%p",help=f"규칙: {INTENT_GAP:.0f}%p 이내면 비슷함 · {check['기준 설문']}")
+    else:
+        right.metric("설문 구매의향과 차이","비교 자료 없음",help="이 컨셉 이름의 제공 설문이 없으면 비교하지 않습니다.")
+    st.markdown(sections.get("feedback","").replace("## 종합 피드백","").strip())
+    if check:
+        show_validation(check)
     with st.expander("평가에 사용한 유사 제품·판매·트렌드 근거"):
         st.markdown(review["evidence"])
-    before_fgi,_,fgi_text = details.partition("## 정성 평가")
-    quantitative = before_fgi.split("## 평가 패널",1)[-1]
     with st.expander("진열대 시뮬레이션 · 선택 분포와 비교 제품"):
         show_shelf(visual)
-        st.markdown("## 평가 패널"+quantitative)
-    with st.expander("가상 FGI · 요약과 라운드별 발언"):
-        fgi_summary,_,reference = fgi_text.partition("## 평가 후 비교")
-        st.markdown(fgi_summary.strip())
-        show_fgi(visual.get("fgi"))
-    if reference:
-        with st.expander("제공 설문과 비교"):
-            st.markdown(reference.strip())
+        for key in ("panel","quant","ab"):
+            if sections.get(key):
+                st.markdown(sections[key])
+    if visual.get("fgi"):
+        with st.expander("가상 FGI · 요약과 라운드별 발언"):
+            st.markdown(sections.get("fgi",""))
+            show_fgi(visual.get("fgi"))
+    if sections.get("footer"):
+        st.caption(sections["footer"])
     if not review["saved"]:
         projects = {item["id"]:item["name"] for item in project.list_projects()}
         with st.form("review_decision"):
@@ -196,6 +201,81 @@ def review_page(mock, api_key):
     if review["saved"]:
         st.success("검토 이력에 저장했습니다.")
     st.download_button("검토 보고서 다운로드",review["report"],file_name="컨셉_검토보고서.md")
+
+
+def review_footer():
+    st.divider()
+    example_results()
+
+
+def agent_page(mock, api_key):
+    from vm.orchestrator import run_agent
+    st.header("AI 에이전트 검토")
+    st.write("요청을 문장으로 쓰면 에이전트가 필요한 도구를 골라 계획·실행하고 근거가 붙은 리포트를 씁니다.")
+    review = st.session_state.get("workflow_review")
+    cfg = review["config"] if review else None
+    scenario = review["scenario"] if review else BASE
+    concept = next(p for p in scenario["products"] if p["id"]==scenario["concept_id"])
+    st.info(f"검증 대상: **{concept['name']}** · {concept['price']:,}원 · {concept['volume_ml']}mL"
+            + ("" if review else " (시연용 기본 컨셉 · '신제품 검토'에서 근거를 조회하면 그 컨셉으로 바뀝니다)"))
+    default_request = (f"{cfg['age'][0]}~{cfg['age'][1]}세 대상 '{cfg['name']}' {cfg['price']:,}원이 적당한지, "
+                       "우리 기존 제품을 잠식하지 않는지 검토해줘") if cfg else \
+        f"20~39세 대상 '{concept['name']}' {concept['price']:,}원이 적당한지 검토해줘"
+    with st.form("agent_form"):
+        request = st.text_area("요청",default_request,height=90)
+        left,right = st.columns(2)
+        budget = left.number_input("페르소나 호출 예산(회)",50,600,200,step=50,
+                                   help="새 API 응답 수 상한. 캐시로 재사용된 응답은 세지 않습니다.")
+        steps = right.number_input("최대 단계",3,12,8)
+        go = st.form_submit_button("에이전트 실행",type="primary",disabled=not can_run(mock))
+    if not can_run(mock):
+        st.caption("실행하려면 사이드바에 API 키를 넣거나 API 없이 시험(mock)을 켜세요.")
+    labels = {"check_reliability":"신뢰도 확인","lookup_evidence":"유사 제품·판매·트렌드 근거 조회",
+              "run_shelf_simulation":"진열대 시뮬레이션","compare_prices":"가격 비교","compare_concepts":"컨셉 문구 비교",
+              "get_reasons":"구매·외면 이유 확인","run_fgi":"가상 좌담회","suggest_improvements":"개선안 제안",
+              "check_cannibalization":"자사 잠식 확인","write_report":"리포트 작성"}
+    if go:
+        box = st.status("에이전트 실행 중",expanded=True)
+        def on_step(step,name,args,result):
+            box.write(f"**{step} · {labels.get(name,name)}** "+(json.dumps(args,ensure_ascii=False) if args else ""))
+        try:
+            res = run_agent(request,scenario,budget=int(budget),max_steps=int(steps),mock=mock,on_step=on_step,
+                            api_key=api_key,min_diff=3.0,data=datasets.current(),pool=pool(),
+                            channel=cfg["channel"] if cfg else "")
+            box.update(label=f"완료 · 새 응답 {res['api_calls']}회 / 예산 {res['budget']}",state="complete",expanded=False)
+            st.session_state["agent_result"] = res
+        except Exception as exc:
+            box.update(label="실패",state="error")
+            st.error(f"{type(exc).__name__}: {exc}")
+    res = st.session_state.get("agent_result")
+    if res:
+        st.markdown(res["report"] or "(리포트 없음)")
+        with st.expander("실행 기록(도구 호출 순서와 결과)"):
+            st.table(pd.DataFrame([{"단계":t["step"],"도구":labels.get(t["tool"],t["tool"]),
+                                    "입력":json.dumps(t["args"],ensure_ascii=False)[:120]} for t in res["trace"]]))
+            st.json(res["trace"],expanded=False)
+        st.download_button("리포트 다운로드",res["report"] or "",file_name="에이전트_리포트.md")
+    with st.expander("에이전트 설계 · 도구와 안전장치"):
+        agent_design_page()
+
+
+def validation_page(mock, api_key):
+    data = datasets.current()
+    reliability_page(data)
+    st.subheader("제공 설문과 컨셉별 대조 실행")
+    st.caption(f"검증용 응답자 {data.get('split',{}).get('holdout','-')}명 · 패널에 붙인 응답자 "
+               f"{data.get('split',{}).get('panel','-')}명 (응답자 ID 해시로 고정 분할, 서로 겹치지 않음)")
+    n = st.radio("컨셉당 가상 인원",[30,50],horizontal=True,
+                 help="컨셉 수 × 인원만큼 API를 호출합니다. 같은 조건을 다시 돌리면 캐시를 씁니다.")
+    if st.button("컨셉별 대조 실행",disabled=not (can_run(mock) and data.get("references"))):
+        try:
+            with st.spinner("컨셉마다 같은 패널로 '사 볼 의향'을 묻는 중입니다."):
+                validate_concepts(pool(),LLM(mock=mock,api_key=api_key),BASE,data,n=n)
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+    if not data.get("references"):
+        st.caption("설문 구매의향 자료가 없어 실행할 수 없습니다. '과거 자료 관리'에서 표준 엑셀 3종을 등록하세요.")
 
 
 def reload_review(cfg):
@@ -263,11 +343,17 @@ def archive_page(mock, api_key):
         if st.button("표준 데이터 검증 및 등록",disabled=not all(files.values())):
             try:
                 data = datasets.register({k:(f.name,f.getvalue()) for k,f in files.items()})
-                st.success(f"표준 데이터 등록 완료 · {data['version']}")
+                st.success(f"표준 데이터 등록 완료 · {data['version']} · 제외한 행 {len(data['issues'])}개")
             except Exception as exc:
                 st.error(f"표준 데이터 등록 실패 · {exc}")
     active_standard = datasets.current()
     st.caption(f"현재 적용 중 · {active_standard['version']}")
+    if active_standard.get("issues"):
+        with st.expander(f"등록에서 제외한 행 {len(active_standard['issues'])}개 · 사유 확인"):
+            st.caption("형식이 다른 행은 등록을 멈추지 않고 빼 두었습니다. 원본을 고친 뒤 다시 등록하면 반영됩니다.")
+            issues = pd.DataFrame(active_standard["issues"])
+            st.dataframe(issues.groupby(["시트","사유"]).size().rename("행 수").reset_index(),hide_index=True)
+            st.dataframe(issues,hide_index=True)
     st.header("과거 자료 정리")
     upload = st.file_uploader("자료 파일 · CSV, XLSX, TXT, MD", type=["csv","xlsx","txt","md"], key="legacy_file")
     st.caption("표는 시트별 행, 텍스트는 빈 줄로 나눈 문단 단위입니다. AI 분류 시 선택한 원문을 모델에 전송합니다.")
@@ -324,15 +410,19 @@ with st.sidebar:
         st.session_state["pw_ok"] = False
 
 hero()
-page = st.radio("이동",PAGES,key="navigation",horizontal=True,label_visibility="collapsed")
-st.divider()
-if page == PAGES[0]:
+if st.session_state.get("navigation") not in PAGES:
+    st.session_state["navigation"] = PAGES[0]
+page = st.segmented_control("이동",PAGES,key="navigation",label_visibility="collapsed") or PAGES[0]
+if page == "신제품 검토":
     review_page(mock,api_key)
-elif page == PAGES[1]:
+    review_footer()
+elif page == "AI 에이전트":
+    agent_page(mock,api_key)
+elif page == "신뢰도 검증":
+    validation_page(mock,api_key)
+elif page == "과거 자료 관리":
     archive_page(mock,api_key)
-elif page == PAGES[2]:
+elif page == "검토 이력":
     history_page()
-elif page == PAGES[3]:
-    agent_design_page()
 else:
     limits_page()

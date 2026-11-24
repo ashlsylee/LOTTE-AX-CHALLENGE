@@ -11,6 +11,8 @@
 - get_reasons         : 시뮬레이션의 구매·비구매 이유 표본 보기
 - run_fgi             : 가상 좌담회(페르소나 4~6명이 라운드별로 대화, 입장 변화 추적)
 - suggest_improvements: 비구매 이유를 근거로 개선 컨셉 제안 → compare_concepts로 재검증
+- lookup_evidence     : 등록 자료(유사 제품·중단 사유·POS·유통 인프라·구매여정·트렌드)에서 근거 조회
+- check_cannibalization: 우리 기존 제품을 진열대에 넣고, 신제품이 있을 때와 없을 때 기존 제품 몫이 얼마나 줄어드는지(자사 잠식)
 - write_report        : 최종 리포트 제출(종료)
 
 안전장치
@@ -32,6 +34,7 @@ from datetime import datetime
 import pandas as pd
 from dotenv import load_dotenv
 
+from . import datasets
 from .config import OUT_DIR, result_files
 from .llm import LLM
 from .personas import load_pool, sample_panel
@@ -40,6 +43,8 @@ from .fgi import ROUNDS as FGI_ROUNDS
 from .fgi import compact as fgi_compact
 from .fgi import run_fgi
 from .simulate import load_scenario, run, shares_of
+from .workflow import evidence as find_evidence
+from .workflow import panel_sample
 
 MAX_PANEL = 100
 
@@ -47,7 +52,7 @@ AGENT_SYSTEM = """당신은 롯데칠성음료 신제품 기획팀을 돕는 '�
 AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 답합니다.
 
 일하는 방식
-1. 먼저 check_reliability로 이 패널을 어디까지 믿을 수 있는지 확인하세요.
+1. 먼저 check_reliability로 이 패널을 어디까지 믿을 수 있는지 확인하고, lookup_evidence로 유사 제품·판매·트렌드 근거를 보세요.
 2. 질문에 맞게 계획을 세우고 필요한 도구만 호출하세요. 타깃 연령이 있으면 age_min/age_max를 쓰세요.
 3. 결과에 쏠림이나 이상한 점이 보이면 get_reasons로 이유를 확인하거나 비교 실험을 추가하세요.
 4. 예산을 먼저 나눠 계획하세요. 기본 인원은 50명으로 하고, 가격·문구 비교 실험에 쓸 예산을 남기세요.
@@ -56,6 +61,7 @@ AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 
    예산 부족 오류가 나면 다른 실험으로 넘어가지 말고, 안 개수나 인원을 줄여 핵심 실험을 다시 시도하세요.
 7. 정성적 이유가 필요하면 run_fgi(가상 좌담회)로 누가 왜 망설이는지, 누가 설득되는지 확인하세요.
 8. 개선이 필요해 보이면 suggest_improvements로 개선안을 받고 compare_concepts로 같은 패널에서 재검증하세요.
+10. 근거에 우리 회사의 비슷한 판매 제품이 있으면 check_cannibalization으로 자사 잠식을 확인하세요(가격·용량은 근거에 있는 값만, 없으면 가정이라고 밝히세요).
 9. 타깃에 성별·지역(수도권/비수도권)·1인 가구 조건이 있으면 sex/region/single_only를 쓰세요.
 5. 마지막에 반드시 write_report로 한국어 마크다운 리포트를 제출하세요.
 
@@ -68,6 +74,7 @@ AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 
 - FGI 발언은 소수 참여자의 정성적 의견이므로 수치처럼 일반화하지 마세요.
 - 구성: 요약(결론 2~3줄) / 근거(실행한 실험과 수치) / 타깃·가격·문구 제안 / 신뢰도와 한계 / 다음 단계(실제 조사로 확인할 것)
 - 신뢰도: check_reliability 결과를 근거로, 어느 부분은 믿을 만하고 어느 부분은 조심해야 하는지 쓰세요.
+- 트렌드는 근거의 수치(전년 동월 대비 등)만 인용하고, 반짝 유행인지 지속 흐름인지는 근거가 부족하면 보류하세요.
 - 이 결과는 실제 소비자 조사를 대신하지 않는 '앞단 필터'임을 명시하세요."""
 
 TOOLS = [
@@ -119,6 +126,23 @@ TOOLS = [
         "parameters": {"type": "object", "additionalProperties": False, "properties": {
             "n": {"type": "integer", "description": "개선안 수(2~3)"}}}}},
     {"type": "function", "function": {
+        "name": "lookup_evidence",
+        "description": "등록된 자료에서 신제품과 비슷한 제품(판매·중단 사유), POS 실적, 유통 인프라, 구매여정, 검색 트렌드·SNS 근거를 찾는다. 비용 없음.",
+        "parameters": {"type": "object", "additionalProperties": False, "properties": {
+            "keywords": {"type": "string", "description": "추가 검색어(선택). 기본은 신제품 이름·설명"},
+            "channel": {"type": "string", "description": "판매 채널(예: 편의점). 유통 인프라 확인용"}}}}},
+    {"type": "function", "function": {
+        "name": "check_cannibalization",
+        "description": "우리 기존 제품(1~3개)을 진열대에 추가하고, 신제품이 없을 때와 있을 때 같은 패널의 선택을 비교해 "
+                       "기존 제품 몫이 얼마나 신제품으로 옮겨 가는지(자사 잠식) 본다. 비용 = 인원 × 2.",
+        "parameters": {"type": "object", "additionalProperties": False, "required": ["own_products"], "properties": {
+            "own_products": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                                                        "required": ["name", "price", "description"],
+                                                        "properties": {"name": {"type": "string"}, "price": {"type": "integer"},
+                                                                       "volume_ml": {"type": "integer"},
+                                                                       "description": {"type": "string"}}}},
+            "n": {"type": "integer"}, "age_min": {"type": "integer"}, "age_max": {"type": "integer"}}}}},
+    {"type": "function", "function": {
         "name": "write_report",
         "description": "최종 리포트(한국어 마크다운)를 제출하고 작업을 끝낸다.",
         "parameters": {"type": "object", "additionalProperties": False, "required": ["markdown"], "properties": {
@@ -132,7 +156,8 @@ SEGMENT_PROPS = {
     "single_only": {"type": "boolean", "description": "1인 가구만"},
 }
 for _t in TOOLS:
-    if _t["function"]["name"] in ("run_shelf_simulation", "compare_prices", "compare_concepts", "run_fgi"):
+    if _t["function"]["name"] in ("run_shelf_simulation", "compare_prices", "compare_concepts", "run_fgi",
+                                  "check_cannibalization"):
         _t["function"]["parameters"]["properties"].update(SEGMENT_PROPS)
 
 
@@ -147,10 +172,13 @@ def _bootstrap_ci(values: pd.Series, n_boot: int = 1000) -> list:
 class Toolbox:
     """에이전트가 호출하는 도구. 기존 시뮬레이션 모듈을 그대로 감싼다."""
 
-    def __init__(self, scenario: dict, llm: LLM, budget: int, seed: int = 42):
+    def __init__(self, scenario: dict, llm: LLM, budget: int, seed: int = 42, data: dict | None = None,
+                 pool: pd.DataFrame | None = None, channel: str = ""):
         self.base_scenario, self.llm, self.seed = scenario, llm, seed
         self.budget_left = budget
-        self.pool = load_pool()
+        self.pool = load_pool() if pool is None else pool
+        self.data = datasets.current() if data is None else data
+        self.channel = channel
         self.last_df, self.last_scenario = None, scenario
         self.runs = []
         self.quota = None
@@ -161,6 +189,10 @@ class Toolbox:
         if self.quota and not any([age_min, age_max, sex, region, single_only]):
             from .connect import quota_panel  # 받은 데이터의 고객 구성대로 패널을 뽑는다
             return quota_panel(self.pool, n, self.quota, self.seed)
+        if self.data.get("profiles") and not any([sex, region, single_only]):
+            # 등록 자료가 있으면 제공 패널의 구매 행동을 붙인 결합 패널을 쓴다(신제품 검토 화면과 같은 방식)
+            panel, _, _ = panel_sample(self.pool, n, age_min or 19, age_max or 99, self.seed, self.data)
+            return panel
         return sample_panel(self.pool, n, self.seed, age_min, age_max, sex=sex, region=region,
                             single_only=bool(single_only))
 
@@ -215,7 +247,13 @@ class Toolbox:
             r = json.loads(open(f, encoding="utf-8").read())
             if not r.get("mock"):
                 extra.append({k: r.get(k) for k in ["question", "mae", "random_mae", "n_ok", "source"]})
+        holdout = [json.loads(open(f, encoding="utf-8").read()) for f in result_files("validation_*/result.json")
+                   if "_mock" not in f][-1:]
         return {
+            "제공 설문 대조(컨셉별 구매의향)": {k: holdout[0][k] for k in ("time", "n", "mae", "baseline_mae", "within_rule",
+                                                                    "intent_gap_rule")} if holdout else "아직 실행 안 함",
+            "제공 설문 대조 읽는 법": "mae=가상 '사 볼 의향'과 설문 TOP2 차이 평균(%p), baseline_mae=모든 컨셉에 설문 평균 하나만 쓸 때 오차. "
+                                 "mae가 baseline보다 작아야 컨셉 간 차이를 구분한다고 볼 수 있다.",
             "추가 검증(받은 데이터)": extra or "없음",
             "source": "KREI 식품소비행태조사 2023~2025 성인(가중), 같은 질문을 페르소나에게 물어 비교",
             "채택 방식": "prob(100명 분포 응답)" if "prob" in t.index else "base",
@@ -267,6 +305,40 @@ class Toolbox:
         return {"base": {"name": concept["name"], "price": concept["price"], "description": concept["description"]},
                 "variants": variants, "next": "compare_concepts에 base와 variants를 함께 넣어 같은 패널로 비교하세요."}
 
+    def lookup_evidence(self, keywords="", channel=None):
+        c = next(p for p in self.base_scenario["products"] if p["id"] == self.base_scenario["concept_id"])
+        text, count = find_evidence(c["name"], f"{c['description']} {keywords}", self.data, channel or self.channel)
+        return {"data_version": self.data.get("version"), "matched_products": count,
+                "evidence": text[:6000] + ("…(생략)" if len(text) > 6000 else "")}
+
+    def check_cannibalization(self, own_products, n=50, age_min=None, age_max=None, **seg):
+        own = [{"id": f"OWN{i}", "name": p["name"], "price": int(p["price"]), "volume_ml": int(p.get("volume_ml") or 500),
+                "description": p["description"]} for i, p in enumerate(own_products[:3], 1)]
+        panel = self._panel(n, age_min, age_max, **seg)
+        self._charge(len(panel) * 2)
+        with_new = copy.deepcopy(self.base_scenario)
+        with_new["products"] += own
+        without = copy.deepcopy(with_new)
+        without["products"] = [p for p in without["products"] if p["id"] != without["concept_id"]]
+        without["concept_id"] = own[0]["id"]  # 신제품이 없는 진열대(기준)
+        before = self.llm.api_calls
+        a = run(without, panel, self.llm, self.seed, mode="prob")
+        b = run(with_new, panel, self.llm, self.seed, mode="prob")
+        self.budget_left -= self.llm.api_calls - before
+        both = (a.error == "") & (b.error == "")
+        sa, sb = shares_of(a[both], without), shares_of(b[both], with_new)
+        own_ids = [p["id"] for p in own]
+        own_before, own_after = float(sa[own_ids].sum() * 100), float(sb[own_ids].sum() * 100)
+        new_share = float(sb[with_new["concept_id"]] * 100)
+        return {"same_panel": True, "n_ok": int(both.sum()),
+                "own_share_without_new_%": round(own_before, 1), "own_share_with_new_%": round(own_after, 1),
+                "new_product_share_%": round(new_share, 1),
+                "cannibalization_%p": round(own_before - own_after, 1),
+                "from_own_ratio_%": round((own_before - own_after) / new_share * 100, 1) if new_share else None,
+                "none_share_change_%p": round(float(sb["NONE"] - sa["NONE"]) * 100, 1),
+                "읽는 법": "from_own_ratio=신제품 선택 중 우리 기존 제품에서 옮겨 온 비율. 높을수록 잠식이 크다.",
+                "budget_left": self.budget_left}
+
     def get_reasons(self, limit=15):
         if self.last_df is None:
             return {"status": "아직 실행한 시뮬레이션이 없다"}
@@ -287,6 +359,10 @@ def call_tool(tb: Toolbox, name: str, args: dict):
             return tb.compare_concepts(**args)
         if name == "get_reasons":
             return tb.get_reasons(**args)
+        if name == "lookup_evidence":
+            return tb.lookup_evidence(**args)
+        if name == "check_cannibalization":
+            return tb.check_cannibalization(**args)
         if name == "run_fgi":
             return tb.run_fgi(**args)
         if name == "suggest_improvements":
@@ -299,20 +375,24 @@ def call_tool(tb: Toolbox, name: str, args: dict):
 def scripted_plan(request: str):
     """--mock: API 없이 도구 연결만 시험하기 위한 고정 계획."""
     yield "check_reliability", {}
+    yield "lookup_evidence", {}
     yield "run_shelf_simulation", {"n": 30, "age_min": 20, "age_max": 39}
     yield "get_reasons", {"limit": 5}
     yield "compare_prices", {"prices": [1700, 1900, 2100], "n": 30, "age_min": 20, "age_max": 39}
     yield "run_fgi", {"k": 4, "age_min": 20, "age_max": 39}
     yield "suggest_improvements", {"n": 2}
+    yield "check_cannibalization", {"own_products": [{"name": "우리 기존 제품(가정)", "price": 1800,
+                                                     "description": "비교용 기존 제품"}], "n": 20}
 
 
 def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 10, model: str | None = None,
               agent_model: str | None = None, mock: bool = False, on_step=None, api_key: str | None = None,
-              quota: dict | None = None, min_diff: float = 3.0) -> dict:
+              quota: dict | None = None, min_diff: float = 3.0, data: dict | None = None,
+              pool: pd.DataFrame | None = None, channel: str = "") -> dict:
     """에이전트 1회 실행. CLI와 화면(app.py)이 같이 쓴다. on_step(step, tool, args, result)로 진행을 알린다."""
     load_dotenv()
     llm = LLM(model, mock=mock, api_key=api_key)
-    tb = Toolbox(scenario, llm, budget)
+    tb = Toolbox(scenario, llm, budget, data=data, pool=pool, channel=channel)
     tb.quota = quota
     out_dir = OUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
     out_dir.mkdir(parents=True)
@@ -335,7 +415,8 @@ def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 
                    "※ 검증 대상은 기본 시나리오의 신제품(concept_id)입니다. 요청 문장의 제품명·가격이 시나리오와 다르면 "
                    "리포트 맨 앞에 그 차이를 밝히고, 시나리오 기준으로 진행하세요.\n"
                    f"[판단 기준] 두 조건의 차이가 {min_diff}%p 미만이면 뚜렷한 차이로 보지 않습니다.\n\n"
-                   f"[예산] 페르소나 호출 {budget}회, 최대 {max_steps}단계")
+                   f"[예산] 페르소나 호출 {budget}회, 최대 {max_steps}단계\n"
+                   f"[등록 자료] 버전 {tb.data.get('version')} · 판매 채널 {channel or '미지정'}")
         messages = [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": context}]
         for step in range(1, max_steps + 1):
             force = step == max_steps  # 마지막 단계에서는 리포트를 강제

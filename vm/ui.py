@@ -1,29 +1,39 @@
 """Light presentation and explanations shared by PreShelf's review screens."""
 from html import escape
 import json
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from .config import DEMO_DIR
+from .config import DEMO_DIR, result_files
 from .fgi import ROUNDS
 
 LIGHT_STYLE = """
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
+html, body, [class*="css"], .stMarkdown, button, input, textarea {font-family:'Noto Sans KR',sans-serif !important;}
+h1 {font-size:1.55rem !important; font-weight:800 !important; letter-spacing:-.02em;}
+h2 {font-size:1.3rem !important; font-weight:700 !important; letter-spacing:-.01em;}
+h3 {font-size:1.1rem !important; font-weight:700 !important;}
+[data-testid="stSegmentedControl"] {margin:.9rem 0 .4rem;}
+[data-testid="stSegmentedControl"] button {font-weight:600; padding:.45rem 1rem;}
+[data-testid="stSegmentedControl"] button[aria-checked="true"], [data-testid="stSegmentedControl"] button[kind="segmented_controlActive"]
+  {background:#E4002B !important; color:#fff !important; border-color:#E4002B !important;}
 [data-testid="stAppViewContainer"] {
   background: radial-gradient(1200px 500px at 50% -200px, rgba(228,0,43,.08), transparent 70%), #F7F7F8;
 }
 [data-testid="stHeader"] {background: transparent;}
 [data-testid="stSidebar"] {background:#fff; border-right:1px solid #e4e4e7;}
-.block-container {max-width:1200px; padding-top:2.2rem;}
+.block-container {max-width:1200px; padding-top:3.6rem;}
 .preshelf-hero {
-  padding:2.2rem 2.4rem; border-radius:22px; border:1px solid #f2d7dd;
+  padding:1.6rem 2rem; border-radius:22px; border:1px solid #f2d7dd;
   background:radial-gradient(600px 260px at 15% 0%, rgba(228,0,43,.14), transparent 70%),
              linear-gradient(135deg,#FFE8EC,#fff 65%);
   box-shadow:0 6px 24px rgba(0,0,0,.06);
 }
 .preshelf-hero .eyebrow {color:#b3001f; font-size:.78rem; font-weight:700; letter-spacing:.08em;}
-.preshelf-hero h1 {font-size:2.1rem; line-height:1.2; margin:.45rem 0; color:#18181b;}
+.preshelf-hero h1 {font-size:2rem !important; line-height:1.2; margin:.45rem 0; color:#18181b;}
 .preshelf-hero p {margin:0; color:#3f3f46;}
 .preshelf-cards {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.8rem; margin:.5rem 0 1rem;}
 .preshelf-card {
@@ -169,22 +179,61 @@ def limits_page():
         ("A/B와 좌담회", "작은 선택률 차이는 반복 평가로 확인합니다. 좌담회는 이유와 개선안 탐색에 쓰입니다."),
         ("트렌드 해석", "대회 검색지수는 가상 자료입니다. Google Trends를 추가할 경우 상대 검색 관심도를 POS·유통 근거와 함께 해석합니다."),
     ])
-    st.subheader("기존 검증과 모델 쏠림")
-    comparisons = sorted(DEMO_DIR.glob("survey_*/comparison.csv"),reverse=True)
-    if comparisons:
-        data = pd.read_csv(comparisons[0]).set_index("condition")
-        names = {"base":"단일 응답","prob":"분포 응답","무작위 기준선":"무작위 기준선"}
-        rows = [{"평가 방식":label,"1순위 선호 분포 평균절대오차(%p)":data.at[key,"fav_mae"]}
-                for key,label in names.items() if key in data.index]
-        st.table(pd.DataFrame(rows))
-        st.caption("저장된 KREI 일반 음료 선호 설문 재현 실험입니다. 신제품의 실제 판매 오차는 별도 검증이 필요합니다.")
-    st.markdown(
-        "기존 대조실험에서는 모델 응답이 일부 음료에 몰리는 현상이 있었습니다. "
-        "진열 순서를 페르소나별로 섞고, 미구매를 허용하며, 답변 분포와 단일 응답 결과를 설문에 대조했습니다."
-    )
+    st.caption("검증 수치는 '신뢰도 검증' 메뉴에서 봅니다.")
     st.subheader("다음 검증")
     st.table(pd.DataFrame([
         ["시뮬레이션 재현성", "표집 시드를 바꿔 가격·컨셉 판단이 같은 방향인지 확인합니다."],
         ["실제 소비자 확인", "소규모 설문과 매장 파일럿에서 구매의향·선택·판매를 각각 비교합니다."],
         ["현업 데이터 연결", "실제 POS·입점·회전 자료의 접근 권한과 출처 기록을 정한 뒤 연동합니다."],
     ],columns=["과제","확인할 내용"]))
+
+
+RULES = [
+    ["주 지표 (KREI)", "연령대별 '좋아하는 음료 1순위' 분포 오차(fav_mae)", "가장 작은 응답 방식을 기본으로 채택 → 100명 분포 응답"],
+    ["검증 지표 (KREI)", "제로 음료 섭취 빈도 오차", "설정 선택에 쓰지 않음(과적합 점검)"],
+    ["참고선 (KREI)", "실제 설문끼리 연도 비교 1.2~1.8%p · 무작위 응답", "오차 수준 해석"],
+    ["컨셉 대조 (제공 설문)", "가상 '사 볼 의향' vs 구매의향 TOP2(4~5점)", "차이 10%p 이내면 '비슷함', 넘으면 보정 계수 표시 + 실제 조사 우선"],
+    ["컨셉 대조 참고선", "모든 컨셉에 설문 평균 하나만 쓸 때 오차", "가상 오차가 이보다 작아야 컨셉 간 차이를 구분한다고 봄"],
+    ["분할", "제공 설문 응답자를 ID 해시로 반씩 나눔", "절반은 패널 구매 행동, 절반은 대조용 → 같은 사람을 두 번 쓰지 않음"],
+    ["조건 차이", "가격·문구 두 조건의 선택률 차이", "3%p 미만이면 '뚜렷하지 않음'"],
+]
+
+
+def show_validation(check):
+    st.dataframe(pd.DataFrame({"항목":list(check),"값":[str(v) for v in check.values()]}),hide_index=True,width="stretch")
+
+
+def reliability_page(data):
+    st.header("이 패널을 어디까지 믿을 수 있나")
+    st.write("두 가지로 확인합니다. ① 공개 정부 설문(KREI)과 같은 질문을 페르소나에게 묻는 일반 검증, "
+             "② 제공된 소비자 조사의 컨셉별 구매의향과 가상 응답을 맞춰 보는 컨셉 검증.")
+    vals = [f for f in result_files("validation_*/result.json")][::-1]
+    st.subheader("② 제공 설문과 컨셉별 대조")
+    if vals:
+        pick = st.selectbox("대조 결과",vals,format_func=lambda f: Path(f).parent.name.replace("validation_",""))
+        r = json.loads(Path(pick).read_text(encoding="utf8"))
+        c1,c2,c3 = st.columns(3)
+        c1.metric("가상 vs 설문 오차",f"{r['mae']}%p",help="컨셉별 '사 볼 의향'과 구매의향 TOP2 차이의 평균")
+        c2.metric("평균 기준선",f"{r['baseline_mae']}%p",help="모든 컨셉에 설문 평균 하나만 쓸 때 오차")
+        c3.metric("규칙 안에 든 컨셉",f"{r['within_rule']}/{len(r['rows'])}",help=f"차이 {r['intent_gap_rule']:.0f}%p 이내")
+        if r["mock"]:
+            st.caption("모의 실행 결과입니다. 수치는 의미가 없습니다.")
+        elif r["mae"] < r["baseline_mae"]:
+            st.success("가상 응답이 평균 기준선보다 설문에 가깝습니다. 컨셉 간 순위 비교에 참고할 수 있습니다.")
+        else:
+            st.warning("가상 응답이 평균 기준선보다 낫지 않습니다. 컨셉 간 차이는 단정하지 말고 보정 계수와 실제 조사로 확인하세요.")
+        st.dataframe(pd.DataFrame(r["rows"]),hide_index=True,width="stretch")
+        st.caption(f"자료 버전 {r['data_version']} · 컨셉당 {r['n']}명 · {r['time']}")
+    else:
+        st.info("아직 실행한 컨셉 대조가 없습니다. 아래에서 실행하세요.")
+    st.subheader("① KREI 일반 음료 선호 설문 재현")
+    comps = [f for f in result_files("survey_*/comparison.csv") if "_mock" not in f]
+    if comps:
+        t = pd.read_csv(comps[-1]).set_index("condition")
+        names = {"prob":"100명 분포 응답(채택)","prob(argmax)":"분포 중 가장 큰 답만","base":"한 사람 응답","무작위 기준선":"무작위 응답"}
+        st.dataframe(pd.DataFrame([{"응답 방식":label,"1순위 분포 오차(%p)":t.at[k,"fav_mae"],
+                                    "탄산·이온 4종 오차(%p)":t.at[k,"four_rate_mae"],"제로 섭취 오차(검증, %p)":t.at[k,"zero_mae(검증)"]}
+                                   for k,label in names.items() if k in t.index]),hide_index=True,width="stretch")
+        st.caption("실제 설문끼리 연도를 바꿔 비교해도 1.2~1.8%p 차이가 납니다. 이 검증은 이전 패널 구성(구매 행동 결합 전)으로 한 것입니다.")
+    with st.expander("📏 평가 규칙 (결과를 보기 전에 정한 기준)"):
+        st.table(pd.DataFrame(RULES,columns=["항목","무엇을 보나","판단"]))
