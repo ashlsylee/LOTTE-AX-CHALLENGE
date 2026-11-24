@@ -94,7 +94,7 @@ def log_run(p: dict, cond: dict, kind: str, summary: dict, path: str = "") -> di
     advance(v, 2)  # 타깃을 정하고 실행했으므로
     if kind in ("진열대", "에이전트", "FGI", "데이터 검증"):
         advance(v, 3)
-    if kind in ("에이전트", "개선 비교"):
+    if kind in ("에이전트", "개선 비교", "본선 통합 검토"):
         advance(v, 4)
     run = {"time": _now(), "version": v["id"], "kind": kind, "target": cond_text(cond), "summary": summary, "path": path}
     p["runs"].append(run)

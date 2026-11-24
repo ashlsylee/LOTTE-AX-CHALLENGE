@@ -24,26 +24,28 @@ COLUMNS = [
 ]
 
 
-def download_pool_light(max_rows: int = 30000) -> None:
-    """메모리가 작은 서버(Streamlit Cloud 등)용: 첫 파일을 조금씩 나눠 읽어 max_rows명만 저장한다.
-    파일 전체를 한 번에 읽으면 최대 약 1GB를 써서 무료 서버에서 멈출 수 있다."""
-    import pyarrow as pa
+def download_pool_light(max_rows: int = 10000) -> None:
+    """첫 shard 전체에서 재현 가능한 무작위 우선순위로 최대 max_rows명 보관."""
+    import numpy as np
     import pyarrow.parquet as pq
     from huggingface_hub import HfFileSystem
+
+    rng = np.random.default_rng(42)
     path = f"datasets/nvidia/Nemotron-Personas-Korea/data/train-00000-of-{N_TOTAL_SHARDS:05d}.parquet"
-    PERSONA_PATH.parent.mkdir(exist_ok=True)
-    writer, done = None, 0
-    with HfFileSystem().open(path, "rb") as f:
-        for batch in pq.ParquetFile(f).iter_batches(batch_size=5000, columns=COLUMNS):
-            table = pa.Table.from_batches([batch]).slice(0, max_rows - done)
-            writer = writer or pq.ParquetWriter(PERSONA_PATH, table.schema)
-            writer.write_table(table)
-            done += table.num_rows
-            if done >= max_rows:
-                break
-    if writer:
-        writer.close()
-    print(f"총 {done:,}명 저장(경량): {PERSONA_PATH}")
+    selected = pd.DataFrame()
+    with HfFileSystem().open(path,"rb") as stream:
+        for batch in pq.ParquetFile(stream).iter_batches(batch_size=5000,columns=COLUMNS):
+            current = batch.to_pandas()
+            current["_priority"] = rng.random(len(current))
+            selected = pd.concat([selected,current],ignore_index=True)
+            selected = selected.nsmallest(max_rows,"_priority")
+    if selected.empty:
+        raise ValueError("Nemotron 후보 풀이 비어 있습니다.")
+    PERSONA_PATH.parent.mkdir(parents=True,exist_ok=True)
+    temporary = PERSONA_PATH.with_suffix(".tmp.parquet")
+    selected.drop(columns="_priority").to_parquet(temporary,index=False)
+    temporary.replace(PERSONA_PATH)
+    print(f"총 {len(selected):,}명 저장: {PERSONA_PATH}")
 
 
 def download_pool(shards: int = 1) -> pd.DataFrame:
@@ -68,6 +70,8 @@ def load_pool() -> pd.DataFrame:
     if "sports_persona" not in pool.columns:
         print("※ 페르소나 풀이 예전 버전이라 'full' 프로필용 열이 없습니다. "
               "`python -m vm.personas` 를 다시 실행하세요.")
+    if len(pool) > 10000:
+        pool = pool.sample(10000, random_state=42).copy()
     pool["age_group"] = pd.cut(pool["age"], bins=AGE_BINS, labels=AGE_LABELS, right=False)
     pool["is_capital"] = pool["province"].isin(["서울", "경기", "인천"]).map(
         {True: "수도권", False: "비수도권"})
@@ -99,4 +103,8 @@ def sample_panel(pool: pd.DataFrame, n: int, seed: int = 42,
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="페르소나 풀 다운로드")
     ap.add_argument("--shards", type=int, default=1, help="받을 파일 수(1~9, 1개≈11만 명)")
-    download_pool(ap.parse_args().shards)
+    args = ap.parse_args()
+    if args.shards == 1:
+        download_pool_light()
+    else:
+        download_pool(args.shards)

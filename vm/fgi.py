@@ -39,6 +39,8 @@ def pick_participants(panel: pd.DataFrame, k: int, seed: int) -> pd.DataFrame:
     """성별·연령이 섞이도록 고른다."""
     df = panel.sample(frac=1, random_state=seed)
     out = df.groupby("sex", group_keys=False).head((k + 1) // 2).head(k)
+    if len(out) < k:
+        out = pd.concat([out,df.loc[~df.index.isin(out.index)].head(k-len(out))])
     return out.sort_values("age").reset_index(drop=True)
 
 
