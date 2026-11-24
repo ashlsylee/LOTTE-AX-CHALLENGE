@@ -3,3 +3,8 @@
 __pycache__/
 data/*.parquet
 outputs/
+
+# 대회 제공 자료와 그 파생 파일은 저장소에 올리지 않는다(로컬에만 보관)
+data/challenge/
+data/sample/*.xlsx
+*.sqlite3
