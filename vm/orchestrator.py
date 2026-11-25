@@ -11,7 +11,9 @@
 - get_reasons         : 시뮬레이션의 구매·비구매 이유 표본 보기
 - run_fgi             : 가상 좌담회(페르소나 4~6명이 라운드별로 대화, 입장 변화 추적)
 - suggest_improvements: 비구매 이유를 근거로 개선 컨셉 제안 → compare_concepts로 재검증
-- lookup_evidence     : 등록 자료(유사 제품·중단 사유·POS·유통 인프라·구매여정·트렌드)에서 근거 조회
+- data_warnings       : 등록 자료의 품질·설계 경고(빠른 응답, 표본 치우침, 유도 질문, 광고성 트렌드, 봇 로그 등)
+- analyze_concept     : 비슷한 과거 사례·중단 사유(가상 소비자로 확인 가능한지 구분)·트렌드 단계·출시 타이밍·다시 해볼 가치·환산계수
+- run_virtual_survey  : 실제 설문과 같은 문항을 신제품과 비교 제품(자사·경쟁)에 같은 방식으로 묻고, 과거 실패 사유를 우려로 점검
 - check_cannibalization: 우리 기존 제품을 진열대에 넣고, 신제품이 있을 때와 없을 때 기존 제품 몫이 얼마나 줄어드는지(자사 잠식)
 - write_report        : 최종 리포트 제출(종료)
 
@@ -43,7 +45,6 @@ from .fgi import ROUNDS as FGI_ROUNDS
 from .fgi import compact as fgi_compact
 from .fgi import run_fgi
 from .simulate import load_scenario, run, shares_of
-from .workflow import evidence as find_evidence
 from .workflow import panel_sample
 
 MAX_PANEL = 100
@@ -52,18 +53,18 @@ AGENT_SYSTEM = """당신은 롯데칠성음료 신제품 기획팀을 돕는 '�
 AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 답합니다.
 
 일하는 방식
-1. 먼저 check_reliability로 이 패널을 어디까지 믿을 수 있는지 확인하고, lookup_evidence로 유사 제품·판매·트렌드 근거를 보세요.
-2. 질문에 맞게 계획을 세우고 필요한 도구만 호출하세요. 타깃 연령이 있으면 age_min/age_max를 쓰세요.
-3. 결과에 쏠림이나 이상한 점이 보이면 get_reasons로 이유를 확인하거나 비교 실험을 추가하세요.
-4. 예산을 먼저 나눠 계획하세요. 기본 인원은 50명으로 하고, 가격·문구 비교 실험에 쓸 예산을 남기세요.
-   (예: 예산 150이면 기본 50명 1회 + 가격 2안 × 50명). 같은 조건의 실행을 반복하지 마세요.
-6. 요청의 핵심 질문(예: 가격이 적당한가 → 가격 비교)에 답하는 실험을 가장 먼저 하세요.
-   예산 부족 오류가 나면 다른 실험으로 넘어가지 말고, 안 개수나 인원을 줄여 핵심 실험을 다시 시도하세요.
-7. 정성적 이유가 필요하면 run_fgi(가상 좌담회)로 누가 왜 망설이는지, 누가 설득되는지 확인하세요.
-8. 개선이 필요해 보이면 suggest_improvements로 개선안을 받고 compare_concepts로 같은 패널에서 재검증하세요.
-10. 근거에 우리 회사의 비슷한 판매 제품이 있으면 check_cannibalization으로 자사 잠식을 확인하세요(가격·용량은 근거에 있는 값만, 없으면 가정이라고 밝히세요).
-9. 타깃에 성별·지역(수도권/비수도권)·1인 가구 조건이 있으면 sex/region/single_only를 쓰세요.
-5. 마지막에 반드시 write_report로 한국어 마크다운 리포트를 제출하세요.
+1. check_reliability와 data_warnings로 패널과 등록 자료를 어디까지 믿을 수 있는지 먼저 확인하세요.
+2. analyze_concept으로 비슷한 과거 제품이 있었는지, 왜 단종·중단됐는지, 지금 트렌드 단계와 출시 타이밍은 어떤지 보세요.
+   - 중단 사유가 수요·가격·맛처럼 소비자 쪽이면 run_virtual_survey의 concerns에 넣어 지금도 같은 우려가 있는지 확인하세요.
+   - 유통·보관·사업성 사유는 가상 소비자로 확인할 수 없습니다. 인프라·내부 확인 과제로 리포트에 남기세요.
+   - 사유가 비어 있으면 '사유 미상'으로 쓰고 담당자 확인 질문을 남기세요.
+3. run_virtual_survey로 신제품과 비교 제품을 같은 문항으로 평가하세요(competitors를 비우면 판매 자료에서 같은 카테고리 제품을 씁니다).
+4. 요청의 핵심 질문(가격·문구·타깃)에 맞는 진열대 실험(run_shelf_simulation, compare_prices, compare_concepts)을 하세요.
+   기본 인원은 50명, 예산을 먼저 나눠 계획하세요. 같은 조건을 반복하지 마세요. 예산 부족이면 인원을 줄여 핵심 실험을 다시 시도하세요.
+5. 근거에 우리 회사의 비슷한 판매 제품이 있으면 check_cannibalization으로 자사 잠식을 확인하세요(가격은 근거의 실제 단가).
+6. 정성적 이유가 필요하면 run_fgi, 개선이 필요하면 suggest_improvements → compare_concepts로 재검증하세요.
+7. 타깃에 성별·지역(수도권/비수도권)·1인 가구 조건이 있으면 sex/region/single_only를 쓰세요.
+8. 마지막에 반드시 write_report로 한국어 마크다운 리포트를 제출하세요.
 
 리포트 규칙
 - 숫자는 반드시 도구 결과에 있는 값만 인용하세요. 추측한 숫자를 만들지 마세요.
@@ -72,7 +73,10 @@ AI 페르소나 가상 소비자 패널 도구를 써서 마케터의 질문에 
   두 조건의 차이가 [판단 기준]의 값(기본 3%p)보다 작으면 "차이가 뚜렷하지 않다"고 쓰고 단정하지 마세요.
 - 연령 표현: '30대'는 30~39세입니다. '20~30대'면 age_min 20, age_max 39.
 - FGI 발언은 소수 참여자의 정성적 의견이므로 수치처럼 일반화하지 마세요.
-- 구성: 요약(결론 2~3줄) / 근거(실행한 실험과 수치) / 타깃·가격·문구 제안 / 신뢰도와 한계 / 다음 단계(실제 조사로 확인할 것)
+- 구성: 요약(결론 2~3줄) / 과거 사례와 다시 해볼 가치·타이밍 / 가상 설문·진열대 결과(비교 제품 포함) / 타깃·가격·문구 제안 /
+  데이터 경고와 신뢰도 / 다음 단계(실제 조사·내부 확인 과제)
+- 실제 설문 수치를 인용할 때는 data_warnings의 관련 경고(품질 의심 응답, 표본 치우침, 유도 질문·앵커 가격)를 함께 쓰고,
+  원자료와 보정 수치(품질 의심 제외·모집단 가중)를 나란히 적으세요. 자료를 임의로 버렸다고 쓰지 마세요.
 - 신뢰도: check_reliability 결과를 근거로, 어느 부분은 믿을 만하고 어느 부분은 조심해야 하는지 쓰세요.
 - 트렌드는 근거의 수치(전년 동월 대비 등)만 인용하고, 반짝 유행인지 지속 흐름인지는 근거가 부족하면 보류하세요.
 - 이 결과는 실제 소비자 조사를 대신하지 않는 '앞단 필터'임을 명시하세요."""
@@ -126,11 +130,30 @@ TOOLS = [
         "parameters": {"type": "object", "additionalProperties": False, "properties": {
             "n": {"type": "integer", "description": "개선안 수(2~3)"}}}}},
     {"type": "function", "function": {
-        "name": "lookup_evidence",
-        "description": "등록된 자료에서 신제품과 비슷한 제품(판매·중단 사유), POS 실적, 유통 인프라, 구매여정, 검색 트렌드·SNS 근거를 찾는다. 비용 없음.",
+        "name": "data_warnings",
+        "description": "등록 자료의 품질·설계 경고 목록(심각도 순). 비용 없음.",
+        "parameters": {"type": "object", "additionalProperties": False, "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "analyze_concept",
+        "description": "비슷한 과거 사례(판매·단종·개발중단)와 중단 사유 유형, 과거 컨셉테스트 결과, 트렌드 단계·출시 타이밍, "
+                       "다시 해볼 가치 판단, 설문→실제 구매경험률 환산계수. 비용 없음.",
         "parameters": {"type": "object", "additionalProperties": False, "properties": {
-            "keywords": {"type": "string", "description": "추가 검색어(선택). 기본은 신제품 이름·설명"},
-            "channel": {"type": "string", "description": "판매 채널(예: 편의점). 유통 인프라 확인용"}}}}},
+            "launch": {"type": "string", "description": "출시 예정 월 YYYY-MM(알면)"},
+            "storage": {"type": "string", "enum": ["상온", "냉장", "냉동"], "description": "보관 조건"},
+            "channels": {"type": "string", "description": "판매 채널(쉼표로)"},
+            "keywords": {"type": "string", "description": "추가 검색어(선택)"}}}}},
+    {"type": "function", "function": {
+        "name": "run_virtual_survey",
+        "description": "실제 패널조사와 같은 문항(이해도·호감도·차별성·구매의향·가격수용도, 지불가격, 월 구매, 예상 만족·평점)을 "
+                       "신제품과 비교 제품에 같은 방식으로 묻고, concerns(과거 실패 사유 등)마다 망설일 사람 수를 본다. 실제 설문과 같은 항목 비교 포함. 비용 = 인원.",
+        "parameters": {"type": "object", "additionalProperties": False, "properties": {
+            "competitors": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                                                       "required": ["name", "price", "description"],
+                                                       "properties": {"name": {"type": "string"}, "price": {"type": "integer"},
+                                                                      "volume_ml": {"type": "integer"}, "description": {"type": "string"}}},
+                            "description": "비교 제품 최대 4개. 비우면 판매 자료의 같은 카테고리 제품"},
+            "concerns": {"type": "array", "items": {"type": "string"}, "description": "점검할 우려(최대 5개)"},
+            "n": {"type": "integer"}, "age_min": {"type": "integer"}, "age_max": {"type": "integer"}}}}},
     {"type": "function", "function": {
         "name": "check_cannibalization",
         "description": "우리 기존 제품(1~3개)을 진열대에 추가하고, 신제품이 없을 때와 있을 때 같은 패널의 선택을 비교해 "
@@ -178,7 +201,7 @@ class Toolbox:
         self.budget_left = budget
         self.pool = load_pool() if pool is None else pool
         self.data = datasets.current() if data is None else data
-        self.channel = channel
+        self.channel, self.storage, self.launch = channel, "", None
         self.last_df, self.last_scenario = None, scenario
         self.runs = []
         self.quota = None
@@ -189,7 +212,7 @@ class Toolbox:
         if self.quota and not any([age_min, age_max, sex, region, single_only]):
             from .connect import quota_panel  # 받은 데이터의 고객 구성대로 패널을 뽑는다
             return quota_panel(self.pool, n, self.quota, self.seed)
-        if self.data.get("profiles") and not any([sex, region, single_only]):
+        if self.data.get("profiles") and not any([sex, region, single_only]) and (age_min or 19) <= 59:
             # 등록 자료가 있으면 제공 패널의 구매 행동을 붙인 결합 패널을 쓴다(신제품 검토 화면과 같은 방식)
             panel, _, _ = panel_sample(self.pool, n, age_min or 19, age_max or 99, self.seed, self.data)
             return panel
@@ -305,11 +328,48 @@ class Toolbox:
         return {"base": {"name": concept["name"], "price": concept["price"], "description": concept["description"]},
                 "variants": variants, "next": "compare_concepts에 base와 variants를 함께 넣어 같은 패널로 비교하세요."}
 
-    def lookup_evidence(self, keywords="", channel=None):
-        c = next(p for p in self.base_scenario["products"] if p["id"] == self.base_scenario["concept_id"])
-        text, count = find_evidence(c["name"], f"{c['description']} {keywords}", self.data, channel or self.channel)
-        return {"data_version": self.data.get("version"), "matched_products": count,
-                "evidence": text[:6000] + ("…(생략)" if len(text) > 6000 else "")}
+    def _concept(self):
+        return next(p for p in self.base_scenario["products"] if p["id"] == self.base_scenario["concept_id"])
+
+    def data_warnings(self):
+        from . import audit
+        ws = audit.run_all()
+        return {"count": len(ws), "warnings": [{k: w[k] for k in ("영역", "심각도", "내용", "분석 반영")} for w in ws if w["심각도"] != "참고"][:20]}
+
+    def analyze_concept(self, launch=None, storage="", channels="", keywords=""):
+        from .workflow import analyze
+        c = self._concept()
+        self.storage = storage or self.storage
+        a = analyze(c["name"], f"{c['description']} {keywords}", launch or self.launch, self.storage, channels or self.channel)
+        self.last_analysis = a
+        slim = lambda h: {k: v for k, v in h.items() if not k.startswith("_") and k not in ("출처",)}  # noqa: E731
+        return {"verdict": a["verdict"], "history": [slim(h) for h in a["history"]], "timing": a["timing"],
+                "conversion": a["conversion"]}
+
+    def run_virtual_survey(self, competitors=None, concerns=None, n=40, age_min=None, age_max=None, **seg):
+        from . import audit, insight
+        from .vsurvey import compare_with_survey, run_survey
+        c = self._concept()
+        if not competitors:
+            competitors = [r for r in insight.competitors(c["name"], c["description"]) if r["price"]][:3] or \
+                [p for p in self.base_scenario["products"] if p["id"] != self.base_scenario["concept_id"]][:3]
+        products = [c, *[{"name": x["name"], "price": int(x["price"]), "volume_ml": int(x.get("volume_ml") or 500),
+                          "description": x.get("description", "")} for x in competitors[:4]]]
+        if concerns is None and getattr(self, "last_analysis", None):
+            concerns = self.last_analysis["verdict"].get("가상 소비자로 확인할 질문", [])
+        panel = self._panel(n, age_min, age_max, **seg)
+        self._charge(len(panel))
+        before = self.llm.api_calls
+        res = run_survey(self.llm, panel, products, self.base_scenario["situation"], concerns or [])
+        self.budget_left -= self.llm.api_calls - before
+        table = res["summary"]
+        cmp = compare_with_survey(table, audit.survey_metrics())
+        top2 = float(table.iloc[0]["구매의향 TOP2(%)"]) if not table.empty else None
+        conv = insight.conversion(getattr(self, "storage", ""), self.channel)
+        return {"n_ok": res["n_ok"], "summary": table.to_dict("records"), "concerns": res["concerns"].to_dict("records"),
+                "vs_real_survey": cmp.to_dict("records") if not cmp.empty else "실제 설문에 같은 제품 없음",
+                "trial_estimate": insight.estimate_trial(top2, conv) if top2 is not None and conv else None,
+                "reasons": res["reasons"][:8], "budget_left": self.budget_left}
 
     def check_cannibalization(self, own_products, n=50, age_min=None, age_max=None, **seg):
         own = [{"id": f"OWN{i}", "name": p["name"], "price": int(p["price"]), "volume_ml": int(p.get("volume_ml") or 500),
@@ -347,6 +407,14 @@ class Toolbox:
         return {"reasons": [f"[{r.age_group} {r.sex}] {r.reason}" for r in sample.itertuples()]}
 
 
+def _jsonable(o):
+    """numpy 숫자 등 JSON이 모르는 값."""
+    try:
+        return o.item()
+    except AttributeError:
+        return str(o)
+
+
 def call_tool(tb: Toolbox, name: str, args: dict):
     try:
         if name == "check_reliability":
@@ -359,8 +427,8 @@ def call_tool(tb: Toolbox, name: str, args: dict):
             return tb.compare_concepts(**args)
         if name == "get_reasons":
             return tb.get_reasons(**args)
-        if name == "lookup_evidence":
-            return tb.lookup_evidence(**args)
+        if name in ("data_warnings", "analyze_concept", "run_virtual_survey"):
+            return getattr(tb, name)(**args)
         if name == "check_cannibalization":
             return tb.check_cannibalization(**args)
         if name == "run_fgi":
@@ -375,7 +443,9 @@ def call_tool(tb: Toolbox, name: str, args: dict):
 def scripted_plan(request: str):
     """--mock: API 없이 도구 연결만 시험하기 위한 고정 계획."""
     yield "check_reliability", {}
-    yield "lookup_evidence", {}
+    yield "data_warnings", {}
+    yield "analyze_concept", {}
+    yield "run_virtual_survey", {"n": 10}
     yield "run_shelf_simulation", {"n": 30, "age_min": 20, "age_max": 39}
     yield "get_reasons", {"limit": 5}
     yield "compare_prices", {"prices": [1700, 1900, 2100], "n": 30, "age_min": 20, "age_max": 39}
@@ -385,14 +455,80 @@ def scripted_plan(request: str):
                                                      "description": "비교용 기존 제품"}], "n": 20}
 
 
+def _loop_chat(client, agent_model, context, max_steps, tb, log):
+    """Chat Completions 방식 도구 호출 루프."""
+    report = None
+    messages = [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": context}]
+    for step in range(1, max_steps + 1):
+        force = step == max_steps  # 마지막 단계에서는 리포트를 강제
+        resp = client.chat.completions.create(
+            model=agent_model, messages=messages, tools=TOOLS,
+            tool_choice={"type": "function", "function": {"name": "write_report"}} if force else "auto")
+        msg = resp.choices[0].message
+        messages.append(msg.model_dump(exclude_none=True))
+        if not msg.tool_calls:
+            messages.append({"role": "user", "content": "도구를 호출하거나 write_report로 리포트를 제출하세요."})
+            continue
+        for k, tc in enumerate(msg.tool_calls, 1):
+            args = json.loads(tc.function.arguments or "{}")
+            if tc.function.name == "write_report":
+                report = args.get("markdown", "")
+                log(f"{step}-{k}", "write_report", {}, {"chars": len(report)})
+                result = {"ok": True}
+            else:
+                result = call_tool(tb, tc.function.name, args)
+                log(f"{step}-{k}", tc.function.name, args, result)
+            messages.append({"role": "tool", "tool_call_id": tc.id,
+                             "content": json.dumps(result, ensure_ascii=False, default=_jsonable)})
+        if report is not None:
+            break
+    return report
+
+
+RESPONSES_TOOLS = [{"type": "function", "name": t["function"]["name"], "description": t["function"]["description"],
+                    "parameters": t["function"]["parameters"]} for t in TOOLS]
+
+
+def _loop_responses(client, agent_model, context, max_steps, tb, log):
+    """Responses API 방식 도구 호출 루프(대회 게이트웨이 기본)."""
+    report = None
+    items = [{"role": "user", "content": context}]
+    for step in range(1, max_steps + 1):
+        force = step == max_steps
+        resp = client.responses.create(
+            model=agent_model, instructions=AGENT_SYSTEM, input=items, tools=RESPONSES_TOOLS,
+            tool_choice={"type": "function", "name": "write_report"} if force else "auto")
+        calls = [o for o in resp.output if getattr(o, "type", "") == "function_call"]
+        items += [o.model_dump(exclude_none=True) if hasattr(o, "model_dump") else o for o in resp.output]
+        if not calls:
+            items.append({"role": "user", "content": "도구를 호출하거나 write_report로 리포트를 제출하세요."})
+            continue
+        for k, c in enumerate(calls, 1):
+            args = json.loads(c.arguments or "{}")
+            if c.name == "write_report":
+                report = args.get("markdown", "")
+                log(f"{step}-{k}", "write_report", {}, {"chars": len(report)})
+                result = {"ok": True}
+            else:
+                result = call_tool(tb, c.name, args)
+                log(f"{step}-{k}", c.name, args, result)
+            items.append({"type": "function_call_output", "call_id": c.call_id,
+                          "output": json.dumps(result, ensure_ascii=False, default=_jsonable)})
+        if report is not None:
+            break
+    return report
+
+
 def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 10, model: str | None = None,
               agent_model: str | None = None, mock: bool = False, on_step=None, api_key: str | None = None,
               quota: dict | None = None, min_diff: float = 3.0, data: dict | None = None,
-              pool: pd.DataFrame | None = None, channel: str = "") -> dict:
+              pool: pd.DataFrame | None = None, channel: str = "", launch: str | None = None, storage: str = "") -> dict:
     """에이전트 1회 실행. CLI와 화면(app.py)이 같이 쓴다. on_step(step, tool, args, result)로 진행을 알린다."""
-    load_dotenv()
+    from .config import load_env
+    load_env()
     llm = LLM(model, mock=mock, api_key=api_key)
     tb = Toolbox(scenario, llm, budget, data=data, pool=pool, channel=channel)
+    tb.launch, tb.storage = launch, storage
     tb.quota = quota
     out_dir = OUT_DIR / f"agent_{datetime.now():%Y%m%d_%H%M%S}{'_mock' if mock else ''}"
     out_dir.mkdir(parents=True)
@@ -408,41 +544,22 @@ def run_agent(request: str, scenario: dict, budget: int = 400, max_steps: int = 
             log(f"{step}-1", name, args, call_tool(tb, name, args))
         report = "# (mock) 리포트\n\n도구 연결 시험용 실행입니다. 실제 리포트는 API로 실행하세요.\n"
     else:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        from .llm import make_client
+        client = make_client(api_key)
+        use_responses = os.getenv("VM_API", "responses").lower() != "chat"
         agent_model = agent_model or os.getenv("VM_AGENT_MODEL") or llm.model
         context = (f"[요청]\n{request}\n\n[기본 시나리오]\n{json.dumps(scenario, ensure_ascii=False)}\n"
                    "※ 검증 대상은 기본 시나리오의 신제품(concept_id)입니다. 요청 문장의 제품명·가격이 시나리오와 다르면 "
                    "리포트 맨 앞에 그 차이를 밝히고, 시나리오 기준으로 진행하세요.\n"
                    f"[판단 기준] 두 조건의 차이가 {min_diff}%p 미만이면 뚜렷한 차이로 보지 않습니다.\n\n"
                    f"[예산] 페르소나 호출 {budget}회, 최대 {max_steps}단계\n"
-                   f"[등록 자료] 버전 {tb.data.get('version')} · 판매 채널 {channel or '미지정'}")
-        messages = [{"role": "system", "content": AGENT_SYSTEM}, {"role": "user", "content": context}]
-        for step in range(1, max_steps + 1):
-            force = step == max_steps  # 마지막 단계에서는 리포트를 강제
-            resp = client.chat.completions.create(
-                model=agent_model, messages=messages, tools=TOOLS,
-                tool_choice={"type": "function", "function": {"name": "write_report"}} if force else "auto")
-            msg = resp.choices[0].message
-            messages.append(msg.model_dump(exclude_none=True))
-            if not msg.tool_calls:
-                messages.append({"role": "user", "content": "도구를 호출하거나 write_report로 리포트를 제출하세요."})
-                continue
-            for k, tc in enumerate(msg.tool_calls, 1):
-                args = json.loads(tc.function.arguments or "{}")
-                if tc.function.name == "write_report":
-                    report = args.get("markdown", "")
-                    log(f"{step}-{k}", "write_report", {}, {"chars": len(report)})
-                    result = {"ok": True}
-                else:
-                    result = call_tool(tb, tc.function.name, args)
-                    log(f"{step}-{k}", tc.function.name, args, result)
-                messages.append({"role": "tool", "tool_call_id": tc.id,
-                                 "content": json.dumps(result, ensure_ascii=False)})
-            if report is not None:
-                break
+                   f"[등록 자료] 버전 {tb.data.get('version')} · 판매 채널 {channel or '미지정'} · 출시 예정 {launch or '미정'} · 보관 {storage or '미지정'}")
+        if use_responses:
+            report = _loop_responses(client, agent_model, context, max_steps, tb, log)
+        else:
+            report = _loop_chat(client, agent_model, context, max_steps, tb, log)
 
-    (out_dir / "trace.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "trace.json").write_text(json.dumps(trace, ensure_ascii=False, indent=2, default=_jsonable), encoding="utf-8")
     (out_dir / "report.md").write_text(report or "(리포트 없음)", encoding="utf-8")
     (out_dir / "request.json").write_text(json.dumps({"request": request, "scenario": scenario, "budget": budget},
                                                      ensure_ascii=False, indent=2), encoding="utf-8")
@@ -462,7 +579,7 @@ def main():
     a = ap.parse_args()
 
     def show(step, name, args, result):
-        short = json.dumps(result, ensure_ascii=False)
+        short = json.dumps(result, ensure_ascii=False, default=_jsonable)
         print(f"\n[{step}] {name}({json.dumps(args, ensure_ascii=False)})\n    → {short[:400]}{'…' if len(short) > 400 else ''}")
 
     r = run_agent(a.request, load_scenario(a.scenario), a.budget, a.max_steps, a.model, a.agent_model, a.mock, show)

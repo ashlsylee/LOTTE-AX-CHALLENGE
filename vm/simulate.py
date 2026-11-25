@@ -29,7 +29,7 @@ def load_scenario(path) -> dict:
 
 
 def run(scenario: dict, panel: pd.DataFrame, llm: LLM, seed: int = 42,
-        tag: str = "", workers: int = 8, progress=None, **agent_kw) -> pd.DataFrame:
+        tag: str = "", workers: int | None = None, progress=None, **agent_kw) -> pd.DataFrame:
     """패널 전원에게 묻고 한 사람당 한 행인 DataFrame을 돌려준다."""
     products, concept = scenario["products"], scenario["concept_id"]
     records = panel.to_dict("records")
@@ -58,7 +58,7 @@ def run(scenario: dict, panel: pd.DataFrame, llm: LLM, seed: int = 42,
         return i, row
 
     done = 0
-    with ThreadPoolExecutor(max_workers=workers) as ex:
+    with ThreadPoolExecutor(max_workers=workers or int(__import__("os").getenv("VM_WORKERS", "16"))) as ex:
         for fut in as_completed([ex.submit(one, i) for i in range(len(records))]):
             i, row = fut.result()
             rows[i] = row

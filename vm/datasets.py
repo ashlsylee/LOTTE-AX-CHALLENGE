@@ -271,6 +271,9 @@ def register(files):
 
 
 def current():
+    stored = from_store()  # 새 자료 저장소에 등록된 자료가 있으면 그것을 쓴다
+    if stored:
+        return {**EMPTY, **stored}
     if DB.is_file():
         with sqlite3.connect(DB) as db:
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='active_dataset'").fetchone():
@@ -278,3 +281,88 @@ def current():
                 if row:
                     return {**EMPTY, **json.loads(row[0])}
     return {**EMPTY, **local_json("standard_demo.json", {})}
+
+
+def from_store() -> dict | None:
+    """자료 저장소(vm.store)에 등록된 표로 평가용 묶음을 만든다. 원자료는 그대로 두고, 집계에 쓴 규칙을 함께 남긴다.
+
+    - POS 집계: BOX(n)은 n개로 환산, 0 이하·완전 중복·TEST 코드는 집계에서 빼되 경고로 남김(원자료는 저장소에 그대로).
+    - 소비자 패널: 응답자 ID 해시로 반씩 나눠 구매 행동 원천(panel)과 대조용(holdout)으로 사용. 품질 의심 응답도 빼지 않고
+      경고와 '품질 의심 제외' 수치를 따로 보여 준다.
+    """
+    from . import store
+    from .audit import num, unit_size, view
+    if store.version() == "자료 없음":
+        return None
+    t = view
+    assets_t, pos_t, resp, evals = t("assets"), t("pos"), t("respondents"), t("concept_eval")
+    mapping = dict(코드="SKU코드", 제품="제품명", 상태="상태", 분류="카테고리", 규격="용기·용량",
+                   컨셉="컨셉요약", 사유="단종·중단사유", 비고="비고")
+    assets = [{k: display(r.get(v) if pd_notna(r.get(v)) else None) for k, v in mapping.items()} for r in assets_t.to_dict("records")]
+    pos = {}
+    months = []
+    if not pos_t.empty:
+        p = pos_t.copy()
+        p["ea"] = num(p["판매수량"]) * p.get("수량단위", "EA").map(unit_size) if "수량단위" in p else num(p["판매수량"])
+        keep = (p["ea"] > 0) & ~p["제품코드"].astype(str).str.contains("TEST", case=False) \
+            & ~p.drop(columns=[c for c in p if c.startswith("_")] + ["ea"]).duplicated()
+        p = p[keep]
+        months = sorted(p["기준월"].astype(str).unique())[-12:]
+        g = p[p["기준월"].astype(str).isin(months)].groupby([p.get("판매채널", "전체"), "제품코드"])
+        for (ch, code), d in g:
+            pos[f"{ch}|{code}"] = [int(d["ea"].sum()), int(num(d.get("판매금액", 0)).sum()), len(d)]
+    donor_groups, holdout_ids = defaultdict(list), set()
+    for r in resp.to_dict("records"):
+        start, sex = age_start(r.get("연령대")), str(r.get("성별") or "")[:1]
+        if start is None or sex not in ("남", "여"):
+            continue
+        if holdout_of(r["응답자ID"]):
+            holdout_ids.add(r["응답자ID"])
+            continue
+        donor_groups[start, sex].append({
+            "age": start, "behavior": " · ".join(f"{label} {display(r.get(col))}" for col, label in BEHAVIOR.items() if col in r)})
+    profiles = [{"age": a, "sex": s, "donors": d, "age_counts": {a: len(d)}} for (a, s), d in sorted(donor_groups.items())]
+    references = {}
+    if not evals.empty:
+        h = evals[evals["응답자ID"].isin(holdout_ids)]
+        for name, d in h.groupby("컨셉"):
+            v = num(d["구매의향"])
+            references[str(name)] = {"n": int(v.notna().sum()), "top2": int((v >= 4).sum()), "source": "검증용 응답자(holdout)",
+                                     "prices": sorted({int(x) for x in num(d.get("제시가격", pd_series())).dropna()})}
+    trends, sns, related = defaultdict(list), {}, defaultdict(list)
+    tr = t("search_trend")
+    for r in tr.to_dict("records"):
+        for k, v in r.items():
+            if k != "기준월" and not str(k).startswith("_") and is_number(v) and 0 <= v <= 100:
+                trends[k].append([str(r["기준월"]), v])
+    for r in sorted(t("sns").to_dict("records"), key=lambda x: str(x.get("기준월"))):
+        sns[r["키워드"]] = {k: r.get(k) for k in ("기준월", "SNS언급량(건)", "광고·협찬 비중")}
+    for r in t("related_search").to_dict("records"):
+        related[r["키워드"]].append((r["연관검색어"], r.get("비중(최근 12개월)")))
+    funnel = defaultdict(lambda: [0, 0, 0])
+    log = t("online_log")
+    if not log.empty:
+        for (_, sku), d in log.groupby(["세션ID", "제품코드"]):
+            ev = set(d["이벤트"].astype(str))
+            if "노출" in ev:
+                f = funnel[sku]
+                f[0] += 1
+                f[1] += "클릭" in ev
+                f[2] += "구매" in ev
+    journeys = [{k: r.get(k) for k in ("관찰ID", "점포(유형)", "방문목적", "선택제품", "구매결과")} for r in t("offline_journey").to_dict("records")]
+    from .audit import excluded_reasons
+    ex = excluded_reasons()
+    return dict(version=f"{', '.join(store.analysis_datasets())} · {store.version()}" + (f" · 제외: {', '.join(ex)}" if ex else ""), assets=assets, pos=pos, pos_period=f"{months[0]}~{months[-1]}" if months else "-",
+                profiles=profiles, trends=trends, sns=sns, related=related, references=references, funnel=funnel,
+                channels=[{k: v for k, v in r.items() if not str(k).startswith("_")} for r in t("infra").to_dict("records")],
+                journeys=journeys, issues=[], split={"panel": sum(len(g["donors"]) for g in profiles), "holdout": len(holdout_ids)})
+
+
+def pd_notna(v):
+    import pandas as pd
+    return v is not None and not (isinstance(v, float) and pd.isna(v))
+
+
+def pd_series():
+    import pandas as pd
+    return pd.Series(dtype=float)

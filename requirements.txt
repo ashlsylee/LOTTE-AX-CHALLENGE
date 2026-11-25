@@ -6,3 +6,6 @@ huggingface_hub
 fsspec
 openpyxl
 streamlit
+python-docx
+python-pptx
+sqlalchemy
